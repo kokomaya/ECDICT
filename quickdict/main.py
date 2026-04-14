@@ -35,9 +35,12 @@ class QuickDictApp(QObject):
 
     _sig_lookup = pyqtSignal(str, object)  # → LookupWorker.lookup
 
-    _POLL_INTERVAL_MS = 150  # 取词轮询间隔
-    _MOUSE_MOVE_THRESHOLD = 30  # 鼠标移动超过该像素才重新取词
-    _DEBOUNCE_MS = 200  # 新词防抖延迟
+    _POLL_INTERVAL_MS = 50       # 光标位置检测间隔（ms）
+    _SETTLE_MS = 80              # 鼠标静止后延迟取词（ms），人几乎无感知
+    _JITTER_PX = 6               # 微抖动阈值（px），低于此视为静止
+    _WORD_ZONE_BASE_PX = 15      # 同词区域基础半径（px）
+    _WORD_ZONE_PER_CHAR_PX = 4   # 每字符额外的同词半径（px）
+    _ABORT_MOVE_PX = 30          # 取词期间移动超此距离 → 中断取词
 
     def __init__(self):
         super().__init__()
@@ -65,19 +68,23 @@ class QuickDictApp(QObject):
         self._worker.sig_result.connect(self._on_lookup_result)
         self._worker_thread.start()
 
-        # 取词轮询定时器
+        # 取词轮询定时器（高频检测鼠标位置，不直接取词）
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._on_poll)
-        self._last_word: str | None = None
 
-        # 防抖定时器（新词到达后延迟查询，避免快速移动时频繁查询）
-        self._debounce_timer = QTimer(self)
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.setInterval(self._DEBOUNCE_MS)
-        self._debounce_timer.timeout.connect(self._on_debounce)
-        self._pending_word: str | None = None
-        self._pending_parts: list[str] = []
+        # 静止等待定时器（鼠标停住后延迟取词，消除时间抖动）
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.setInterval(self._SETTLE_MS)
+        self._settle_timer.timeout.connect(self._on_settle)
+
+        # 轮询状态
+        self._last_poll_pos: tuple[int, int] = (0, 0)
+        self._settle_pos: tuple[int, int] = (0, 0)
+        self._anchor_pos: tuple[int, int] | None = None
+        self._last_word: str | None = None
+        self._word_zone_radius: int = self._WORD_ZONE_BASE_PX
 
         # 快捷键监听（pynput 线程 → Qt 信号桥接）
         self._bridge = _HotkeyBridge()
@@ -104,18 +111,19 @@ class QuickDictApp(QObject):
 
     def _on_activate(self):
         self._last_word = None
-        self._pending_word = None
-        self._last_pos = (0, 0)
+        self._anchor_pos = None
+        self._last_poll_pos = self._get_cursor_pos()
+        self._word_zone_radius = self._WORD_ZONE_BASE_PX
         self._poll_timer.start()
         self._tray.set_capture_enabled(True)
         self._tray.show_message("QECDict", "取词模式已开启", 500)
 
     def _on_deactivate(self):
         self._poll_timer.stop()
-        self._debounce_timer.stop()
-        self._pending_word = None
+        self._settle_timer.stop()
         self._popup.hide_popup()
         self._last_word = None
+        self._anchor_pos = None
         self._tray.set_capture_enabled(False)
 
     def _on_tray_toggle(self):
@@ -152,40 +160,68 @@ class QuickDictApp(QObject):
     # ── 取词轮询 & 防抖 ──────────────────────────────────
 
     def _on_poll(self):
-        """每 150ms 检测鼠标下的单词，新词触发防抖后异步查询。"""
+        """高频检测鼠标位置，结合空间抖动过滤决定是否启动取词。"""
+        x, y = self._get_cursor_pos()
+        lx, ly = self._last_poll_pos
+        dist = ((x - lx) ** 2 + (y - ly) ** 2) ** 0.5
+
+        if dist < self._JITTER_PX:
+            # 微抖动，视为静止 → 放行 settle 定时器继续倒计时
+            return
+
+        # 鼠标发生了有意义的移动
+        self._last_poll_pos = (x, y)
+
+        # 仍在当前词的空间区域内 → 无需重新取词
+        if self._anchor_pos and self._last_word:
+            ax, ay = self._anchor_pos
+            adist = ((x - ax) ** 2 + (y - ay) ** 2) ** 0.5
+            if adist < self._word_zone_radius:
+                return
+
+        # 离开当前词区域（或尚无词） → 立即隐藏旧弹窗，重置 settle 等待
+        if self._last_word:
+            self._popup.hide_popup()
+            self._last_word = None
+            self._anchor_pos = None
+        self._settle_pos = (x, y)
+        self._settle_timer.start()
+
+    def _on_settle(self):
+        """鼠标静止足够久 → 执行取词并查询。"""
         x, y = self._get_cursor_pos()
 
-        # 鼠标未移动足够距离 → 跳过
-        lx, ly = getattr(self, '_last_pos', (0, 0))
-        if abs(x - lx) < self._MOUSE_MOVE_THRESHOLD and abs(y - ly) < self._MOUSE_MOVE_THRESHOLD:
+        # settle 期间鼠标大幅移动 → 放弃本次取词
+        sx, sy = self._settle_pos
+        if ((x - sx) ** 2 + (y - sy) ** 2) ** 0.5 > self._ABORT_MOVE_PX:
             return
-        self._last_pos = (x, y)
 
-        word = self._capture.capture()
+        word = self._capture.capture(x, y)
+
+        # 取词后再次检查：取词期间鼠标大幅移动 → 丢弃结果
+        cx, cy = self._get_cursor_pos()
+        if ((cx - x) ** 2 + (cy - y) ** 2) ** 0.5 > self._ABORT_MOVE_PX:
+            return
+
         if not word:
-            if self._last_word or self._pending_word:
-                self._debounce_timer.stop()
+            if self._last_word:
                 self._popup.hide_popup()
                 self._last_word = None
-                self._pending_word = None
+                self._anchor_pos = None
             return
 
-        # 与当前展示词或待查词相同 → 跳过
-        if word == self._last_word or word == self._pending_word:
+        # 同词 → 仅更新锚点位置
+        if word == self._last_word:
+            self._anchor_pos = (x, y)
             return
 
-        # 新词 → 预先拆分复合词，启动防抖
-        self._pending_word = word
-        self._pending_parts = self._capture.split_word(word)
-        self._debounce_timer.start()
-
-    def _on_debounce(self):
-        """防抖到期 → 将查询请求发送到后台线程。"""
-        if not self._pending_word:
-            return
-        self._last_word = self._pending_word
-        self._sig_lookup.emit(self._pending_word, self._pending_parts)
-        self._pending_word = None
+        # 新词 → 更新状态、计算词区域、发起查询
+        self._anchor_pos = (x, y)
+        self._last_word = word
+        self._word_zone_radius = (self._WORD_ZONE_BASE_PX
+                                  + len(word) * self._WORD_ZONE_PER_CHAR_PX)
+        parts = self._capture.split_word(word)
+        self._sig_lookup.emit(word, parts)
 
     def _on_lookup_result(self, word: str, data):
         """后台查询完成 → 在主线程显示弹窗。"""
@@ -206,7 +242,7 @@ class QuickDictApp(QObject):
 
     def _quit(self):
         self._poll_timer.stop()
-        self._debounce_timer.stop()
+        self._settle_timer.stop()
         self._hotkey.stop()
         self._tray.hide()
         self._worker_thread.quit()

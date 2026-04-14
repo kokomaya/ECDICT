@@ -50,13 +50,14 @@ class WordCapture:
         """切换取词模式。"""
         self._mode = mode
 
-    def capture(self) -> str | None:
+    def capture(self, x: int | None = None, y: int | None = None) -> str | None:
         """
-        获取鼠标当前位置下的英文单词。
+        获取指定坐标（默认鼠标位置）下的英文单词。
 
         根据当前模式选择取词策略。返回清理后的小写单词，或 None。
         """
-        x, y = _get_cursor_pos()
+        if x is None or y is None:
+            x, y = _get_cursor_pos()
 
         if self._mode == CaptureMode.UIA_ONLY:
             return self._capture_via_uia(x, y)
