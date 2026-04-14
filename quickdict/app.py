@@ -9,8 +9,8 @@ import os
 
 from PyQt6.QtCore import QObject, QPoint, QPropertyAnimation, QTimer, pyqtSignal, QEasingCurve
 from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction, QActionGroup
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction, QActionGroup, QPainterPath, QPen, QBrush
+from PyQt6.QtCore import Qt, QRectF
 
 from quickdict.config import ASSETS_DIR
 
@@ -158,6 +158,12 @@ class TrayManager(QObject):
 class _ToastLabel(QLabel):
     """半透明自动淡出的轻量提示，替代系统托盘气泡通知。"""
 
+    _BG_COLOR = QColor(30, 30, 46, 230)
+    _TEXT_COLOR = QColor(255, 255, 255)
+    _BORDER_RADIUS = 6
+    _PADDING_H = 14
+    _PADDING_V = 6
+
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
@@ -167,15 +173,27 @@ class _ToastLabel(QLabel):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setStyleSheet(
-            "QLabel {"
-            "  background: rgba(30, 30, 46, 180);"
-            "  color: #FFFFFF;"
-            "  font-size: 13px;"
-            "  padding: 6px 14px;"
-            "  border-radius: 6px;"
-            "}"
-        )
+        self.setFont(QFont("Microsoft YaHei", 10))
+        self._fade_anim: QPropertyAnimation | None = None
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._fade_out)
+
+    def paintEvent(self, event):
+        """手动绘制圆角背景 + 文字，避免 WA_TranslucentBackground 下 QSS 不生效。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # 圆角背景
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self._BORDER_RADIUS, self._BORDER_RADIUS)
+        p.fillPath(path, QBrush(self._BG_COLOR))
+        # 文字
+        p.setPen(self._TEXT_COLOR)
+        p.setFont(self.font())
+        text_rect = self.rect().adjusted(self._PADDING_H, self._PADDING_V,
+                                         -self._PADDING_H, -self._PADDING_V)
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()
         self._fade_anim: QPropertyAnimation | None = None
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -188,8 +206,11 @@ class _ToastLabel(QLabel):
             self._fade_anim.stop()
 
         self.setText(text)
-        self.adjustSize()
-        self.setWindowOpacity(0.85)
+        fm = self.fontMetrics()
+        w = fm.horizontalAdvance(text) + self._PADDING_H * 2
+        h = fm.height() + self._PADDING_V * 2
+        self.setFixedSize(w, h)
+        self.setWindowOpacity(0.95)
 
         # 定位到屏幕右下角（托盘附近）
         screen = QApplication.primaryScreen()
