@@ -5,20 +5,32 @@ _ocr_capture.py — OCR 截屏取词。
 根据鼠标相对位置定位最近的英文单词。
 不含 UI Automation 逻辑或弹窗逻辑。
 """
+import ctypes
 import re
 
 from quickdict._word_utils import clean_word, extract_word_at_position
 from quickdict.config import logger
 
-# 截图区域：鼠标周围的半宽/半高（像素）
-_HALF_W = 120
-_HALF_H = 40
+# 截图区域：鼠标周围的半宽/半高（逻辑像素，会根据 DPI 缩放）
+_HALF_W = 160
+_HALF_H = 60
 
 # OCR 置信度阈值
-_MIN_CONFIDENCE = 0.5
+_MIN_CONFIDENCE = 0.35
 
 # 结果框到鼠标中心的最大距离（像素），超出则忽略
-_MAX_BOX_DISTANCE = 150
+_MAX_BOX_DISTANCE = 200
+
+
+def _get_screen_scale() -> float:
+    """获取主显示器的 DPI 缩放因子（1.0 = 100%, 1.5 = 150%）。"""
+    try:
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        return dpi / 96.0
+    except Exception:
+        return 1.0
 
 
 class OcrCapture:
@@ -39,7 +51,7 @@ class OcrCapture:
         if not self._ensure_available():
             return None
 
-        img = self._grab_region(x, y)
+        img, hw, hh = self._grab_region(x, y)
         if img is None:
             return None
 
@@ -48,7 +60,7 @@ class OcrCapture:
             return None
 
         # 鼠标在截图中的相对坐标（截图中心）
-        return self._pick_word(results, _HALF_W, _HALF_H)
+        return self._pick_word(results, hw, hh)
 
     # ── 懒加载 ────────────────────────────────────────────
 
@@ -73,13 +85,17 @@ class OcrCapture:
 
     @staticmethod
     def _grab_region(x: int, y: int):
-        """截取鼠标周围区域，返回 PIL Image 或 None。"""
+        """截取鼠标周围区域（DPI 自适应），返回 (PIL Image, half_w, half_h) 或 (None, 0, 0)。"""
         try:
             from PIL import ImageGrab
-            bbox = (x - _HALF_W, y - _HALF_H, x + _HALF_W, y + _HALF_H)
-            return ImageGrab.grab(bbox=bbox)
+            scale = _get_screen_scale()
+            hw = int(_HALF_W * scale)
+            hh = int(_HALF_H * scale)
+            bbox = (x - hw, y - hh, x + hw, y + hh)
+            img = ImageGrab.grab(bbox=bbox)
+            return img, img.width // 2, img.height // 2
         except Exception:
-            return None
+            return None, 0, 0
 
     # ── OCR 识别 ──────────────────────────────────────────
 
