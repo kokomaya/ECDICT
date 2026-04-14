@@ -8,16 +8,16 @@ import sys
 import ctypes
 import ctypes.wintypes
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from quickdict.config import ensure_db, load_settings, save_settings
 from quickdict.config import logger
-from quickdict.dict_engine import DictEngine
 from quickdict.hotkey import HotkeyListener
 from quickdict.word_capture import WordCapture, CaptureMode
 from quickdict.popup_widget import PopupWidget
 from quickdict.app import TrayManager
+from quickdict._lookup_worker import LookupWorker
 
 
 # ── pynput 线程 → Qt 主线程桥接 ───────────────────────────
@@ -33,15 +33,16 @@ class _HotkeyBridge(QObject):
 class QuickDictApp(QObject):
     """主程序控制器：管理各模块的生命周期和信号流。"""
 
+    _sig_lookup = pyqtSignal(str, object)  # → LookupWorker.lookup
+
     _POLL_INTERVAL_MS = 150  # 取词轮询间隔
     _MOUSE_MOVE_THRESHOLD = 30  # 鼠标移动超过该像素才重新取词
+    _DEBOUNCE_MS = 200  # 新词防抖延迟
 
     def __init__(self):
         super().__init__()
 
-        # 词典引擎
         db_path = ensure_db()
-        self._engine = DictEngine(db_path)
 
         # 屏幕取词
         self._capture = WordCapture()
@@ -55,11 +56,28 @@ class QuickDictApp(QObject):
         # 翻译弹窗
         self._popup = PopupWidget()
 
+        # 后台查询线程（sqlite3 连接必须在使用线程中创建）
+        self._worker = LookupWorker(db_path)
+        self._worker_thread = QThread(self)
+        self._worker.moveToThread(self._worker_thread)
+        self._worker_thread.started.connect(self._worker.init_engine)
+        self._sig_lookup.connect(self._worker.lookup)
+        self._worker.sig_result.connect(self._on_lookup_result)
+        self._worker_thread.start()
+
         # 取词轮询定时器
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._on_poll)
         self._last_word: str | None = None
+
+        # 防抖定时器（新词到达后延迟查询，避免快速移动时频繁查询）
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(self._DEBOUNCE_MS)
+        self._debounce_timer.timeout.connect(self._on_debounce)
+        self._pending_word: str | None = None
+        self._pending_parts: list[str] = []
 
         # 快捷键监听（pynput 线程 → Qt 信号桥接）
         self._bridge = _HotkeyBridge()
@@ -86,6 +104,7 @@ class QuickDictApp(QObject):
 
     def _on_activate(self):
         self._last_word = None
+        self._pending_word = None
         self._last_pos = (0, 0)
         self._poll_timer.start()
         self._tray.set_capture_enabled(True)
@@ -93,6 +112,8 @@ class QuickDictApp(QObject):
 
     def _on_deactivate(self):
         self._poll_timer.stop()
+        self._debounce_timer.stop()
+        self._pending_word = None
         self._popup.hide_popup()
         self._last_word = None
         self._tray.set_capture_enabled(False)
@@ -128,10 +149,10 @@ class QuickDictApp(QObject):
         label = self._MODE_LABELS.get(mode_key, mode_key)
         self._tray.show_message("QECDict", f"取词模式: {label}", 500)
 
-    # ── 取词轮询 ──────────────────────────────────────────
+    # ── 取词轮询 & 防抖 ──────────────────────────────────
 
     def _on_poll(self):
-        """每 150ms 检测鼠标下的单词并查询。"""
+        """每 150ms 检测鼠标下的单词，新词触发防抖后异步查询。"""
         x, y = self._get_cursor_pos()
 
         # 鼠标未移动足够距离 → 跳过
@@ -141,23 +162,36 @@ class QuickDictApp(QObject):
         self._last_pos = (x, y)
 
         word = self._capture.capture()
-        if not word or word == self._last_word:
-            # 鼠标移动了但取不到词 → 隐藏旧弹窗
-            if not word and self._last_word:
+        if not word:
+            if self._last_word or self._pending_word:
+                self._debounce_timer.stop()
                 self._popup.hide_popup()
                 self._last_word = None
+                self._pending_word = None
             return
 
-        self._last_word = word
-        data = self._engine.lookup(word)
-        if not data:
-            # 如果是复合词，尝试拆分后查第一个
-            parts = self._capture.capture_split()
-            for part in parts:
-                data = self._engine.lookup(part)
-                if data:
-                    break
+        # 与当前展示词或待查词相同 → 跳过
+        if word == self._last_word or word == self._pending_word:
+            return
 
+        # 新词 → 预先拆分复合词，启动防抖
+        self._pending_word = word
+        self._pending_parts = self._capture.split_word(word)
+        self._debounce_timer.start()
+
+    def _on_debounce(self):
+        """防抖到期 → 将查询请求发送到后台线程。"""
+        if not self._pending_word:
+            return
+        self._last_word = self._pending_word
+        self._sig_lookup.emit(self._pending_word, self._pending_parts)
+        self._pending_word = None
+
+    def _on_lookup_result(self, word: str, data):
+        """后台查询完成 → 在主线程显示弹窗。"""
+        # 查询期间单词已变 → 丢弃过期结果
+        if word != self._last_word:
+            return
         if data:
             x, y = self._get_cursor_pos()
             self._popup.show_word(data, x, y)
@@ -172,9 +206,11 @@ class QuickDictApp(QObject):
 
     def _quit(self):
         self._poll_timer.stop()
+        self._debounce_timer.stop()
         self._hotkey.stop()
         self._tray.hide()
-        self._engine.close()
+        self._worker_thread.quit()
+        self._worker_thread.wait(1000)
         QApplication.quit()
         os._exit(0)
 

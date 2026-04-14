@@ -79,6 +79,11 @@ class WordCapture:
         word = self.capture()
         if not word:
             return []
+        return self.split_word(word)
+
+    @staticmethod
+    def split_word(word: str) -> list[str]:
+        """拆分复合词（驼峰/下划线），不重新取词。"""
         parts = split_compound(word)
         return [w for w in parts if clean_word(w)]
 
