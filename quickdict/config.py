@@ -1,4 +1,5 @@
 # 配置管理（快捷键、主题等）
+import json
 import logging
 import os
 import sys
@@ -38,6 +39,32 @@ STYLES_DIR = os.path.join(_BUNDLE_DIR, "quickdict", "styles") if FROZEN else \
 DATA_DIR = os.path.join(_APP_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "ecdict.db")
 DEFAULT_CSV = os.path.join(_APP_DIR, "stardict", "stardict.csv")
+
+# ── 用户设置持久化 ────────────────────────────────────────
+_SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+_DEFAULTS = {
+    "capture_mode": "auto",  # auto / uia / ocr
+}
+
+
+def load_settings() -> dict:
+    """读取用户设置，文件不存在或损坏时返回默认值。"""
+    if os.path.isfile(_SETTINGS_PATH):
+        try:
+            with open(_SETTINGS_PATH, encoding="utf-8") as f:
+                saved = json.load(f)
+            # 合并默认值（新增字段自动补全）
+            return {**_DEFAULTS, **saved}
+        except Exception:
+            pass
+    return dict(_DEFAULTS)
+
+
+def save_settings(settings: dict):
+    """将用户设置写入 JSON 文件。"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
 def ensure_db() -> str:

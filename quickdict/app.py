@@ -7,8 +7,8 @@ app.py — 系统托盘 & 后台常驻管理。
 
 import os
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+from PyQt6.QtCore import QObject, QPoint, QPropertyAnimation, QTimer, pyqtSignal, QEasingCurve
+from PyQt6.QtWidgets import QApplication, QLabel, QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction, QActionGroup
 from PyQt6.QtCore import Qt
 
@@ -88,12 +88,17 @@ class TrayManager(QObject):
         self._capture_enabled = enabled
         self._action_toggle.setText("关闭取词 ✓" if enabled else "开启取词")
 
-    def show_message(self, title: str, message: str, duration_ms: int = 1500):
-        """在托盘弹出气泡通知。"""
-        self._tray.showMessage(
-            title, message,
-            QSystemTrayIcon.MessageIcon.Information, duration_ms,
-        )
+    def set_capture_mode_checked(self, mode_key: str):
+        """设置取词模式菜单的选中状态。"""
+        action = self._mode_actions.get(mode_key)
+        if action:
+            action.setChecked(True)
+
+    def show_message(self, title: str, message: str, duration_ms: int = 800):
+        """显示轻量 toast 提示（半透明，自动淡出）。"""
+        if not hasattr(self, "_toast") or self._toast is None:
+            self._toast = _ToastLabel()
+        self._toast.show_toast(message, duration_ms)
 
     # ── 内部逻辑 ──────────────────────────────────────────
 
@@ -101,7 +106,7 @@ class TrayManager(QObject):
         """菜单「开启/关闭取词」被点击。"""
         self.sig_toggle_capture.emit()
 
-    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason):
+    def _on_tray_activated(self, reason):
         """托盘图标被交互（双击 → 打开设置）。"""
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.sig_open_settings.emit()
@@ -125,3 +130,62 @@ class TrayManager(QObject):
         painter.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "D")
         painter.end()
         return QIcon(pm)
+
+
+# ── 轻量 Toast 提示 ──────────────────────────────────────
+
+class _ToastLabel(QLabel):
+    """半透明自动淡出的轻量提示，替代系统托盘气泡通知。"""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setStyleSheet(
+            "QLabel {"
+            "  background: rgba(30, 30, 46, 180);"
+            "  color: #FFFFFF;"
+            "  font-size: 13px;"
+            "  padding: 6px 14px;"
+            "  border-radius: 6px;"
+            "}"
+        )
+        self._fade_anim: QPropertyAnimation | None = None
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._fade_out)
+
+    def show_toast(self, text: str, duration_ms: int = 800):
+        """在屏幕右下角显示提示，duration_ms 后淡出。"""
+        self._hide_timer.stop()
+        if self._fade_anim:
+            self._fade_anim.stop()
+
+        self.setText(text)
+        self.adjustSize()
+        self.setWindowOpacity(0.85)
+
+        # 定位到屏幕右下角（托盘附近）
+        screen = QApplication.primaryScreen()
+        sr = screen.availableGeometry()
+        x = sr.right() - self.width() - 16
+        y = sr.bottom() - self.height() - 16
+        self.move(x, y)
+
+        self.show()
+        self._hide_timer.start(duration_ms)
+
+    def _fade_out(self):
+        """淡出动画后隐藏。"""
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(300)
+        self._fade_anim.setStartValue(self.windowOpacity())
+        self._fade_anim.setEndValue(0.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.finished.connect(self.hide)
+        self._fade_anim.start()

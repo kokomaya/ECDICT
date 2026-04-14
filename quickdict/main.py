@@ -10,7 +10,7 @@ import ctypes.wintypes
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from quickdict.config import ensure_db
+from quickdict.config import ensure_db, load_settings, save_settings
 from quickdict.config import logger
 from quickdict.dict_engine import DictEngine
 from quickdict.hotkey import HotkeyListener
@@ -44,6 +44,12 @@ class QuickDictApp(QObject):
 
         # 屏幕取词
         self._capture = WordCapture()
+        self._settings = load_settings()
+
+        # 恢复上次的取词模式
+        saved_mode_key = self._settings.get("capture_mode", "auto")
+        saved_mode = self._MODE_MAP.get(saved_mode_key, CaptureMode.AUTO)
+        self._capture.set_mode(saved_mode)
 
         # 翻译弹窗
         self._popup = PopupWidget()
@@ -68,6 +74,7 @@ class QuickDictApp(QObject):
         self._tray.sig_toggle_capture.connect(self._on_tray_toggle)
         self._tray.sig_capture_mode_changed.connect(self._on_capture_mode_changed)
         self._tray.sig_quit.connect(self._quit)
+        self._tray.set_capture_mode_checked(saved_mode_key)
         self._tray.show()
 
         # 启动键盘监听
@@ -112,9 +119,11 @@ class QuickDictApp(QObject):
     }
 
     def _on_capture_mode_changed(self, mode_key: str):
-        """托盘菜单切换取词模式。"""
+        """托盘菜单切换取词模式，保存到设置文件。"""
         mode = self._MODE_MAP.get(mode_key, CaptureMode.AUTO)
         self._capture.set_mode(mode)
+        self._settings["capture_mode"] = mode_key
+        save_settings(self._settings)
         label = self._MODE_LABELS.get(mode_key, mode_key)
         self._tray.show_message("QECDict", f"取词模式: {label}", 500)
 
