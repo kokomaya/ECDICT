@@ -3,6 +3,7 @@ main.py — QuickDict 程序入口。
 
 串联各模块：快捷键监听 → 屏幕取词 → 词典查询 → 弹窗显示。
 """
+import os
 import sys
 import ctypes
 import ctypes.wintypes
@@ -170,11 +171,12 @@ class QuickDictApp(QObject):
     # ── 退出 ──────────────────────────────────────────────
 
     def _quit(self):
-        self._hotkey.stop()
         self._poll_timer.stop()
-        self._engine.close()
+        self._hotkey.stop()
         self._tray.hide()
+        self._engine.close()
         QApplication.quit()
+        os._exit(0)
 
 
 # ── 入口 ──────────────────────────────────────────────────

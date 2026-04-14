@@ -18,3 +18,5 @@ stardict/
 release/
 dist/
 build/
+
+data/
