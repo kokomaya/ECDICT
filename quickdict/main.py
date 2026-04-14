@@ -4,19 +4,18 @@ main.py — QuickDict 程序入口。
 串联各模块：快捷键监听 → 屏幕取词 → 词典查询 → 弹窗显示。
 """
 import sys
-import os
 import ctypes
 import ctypes.wintypes
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal, Qt
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QApplication
 
 from quickdict.config import ensure_db
 from quickdict.dict_engine import DictEngine
 from quickdict.hotkey import HotkeyListener
 from quickdict.word_capture import WordCapture
 from quickdict.popup_widget import PopupWidget
+from quickdict.app import TrayManager
 
 
 # ── pynput 线程 → Qt 主线程桥接 ───────────────────────────
@@ -25,21 +24,6 @@ class _HotkeyBridge(QObject):
     """将 pynput 线程的回调安全地派发到 Qt 主线程。"""
     activated = pyqtSignal()
     deactivated = pyqtSignal()
-
-
-# ── 托盘图标生成 ──────────────────────────────────────────
-
-def _make_tray_icon() -> QIcon:
-    """生成一个简易的 'D' 字母图标作为托盘图标。"""
-    size = 64
-    pm = QPixmap(size, size)
-    pm.fill(QColor(67, 97, 238))  # #4361EE
-    painter = QPainter(pm)
-    painter.setPen(QColor(255, 255, 255))
-    painter.setFont(QFont("Segoe UI", 36, QFont.Weight.Bold))
-    painter.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "D")
-    painter.end()
-    return QIcon(pm)
 
 
 # ── 主控制器 ──────────────────────────────────────────────
@@ -78,41 +62,39 @@ class QuickDictApp(QObject):
         )
 
         # 系统托盘
-        self._tray = self._init_tray()
+        self._tray = TrayManager()
+        self._tray.sig_toggle_capture.connect(self._on_tray_toggle)
+        self._tray.sig_quit.connect(self._quit)
+        self._tray.show()
 
-        # 启动
+        # 启动键盘监听
         self._hotkey.start()
         print("[QuickDict] 已启动 — 连按两次 Ctrl 激活取词，Esc 退出取词模式")
-
-    # ── 系统托盘 ──────────────────────────────────────────
-
-    def _init_tray(self) -> QSystemTrayIcon:
-        tray = QSystemTrayIcon(_make_tray_icon())
-        tray.setToolTip("QuickDict — 连按 Ctrl×2 取词")
-
-        menu = QMenu()
-        self._action_toggle = menu.addAction("开启取词")
-        self._action_toggle.setEnabled(False)
-        menu.addSeparator()
-        action_quit = menu.addAction("退出")
-        action_quit.triggered.connect(self._quit)
-        tray.setContextMenu(menu)
-        tray.show()
-        return tray
 
     # ── 取词模式控制 ──────────────────────────────────────
 
     def _on_activate(self):
         self._last_word = None
         self._poll_timer.start()
-        self._action_toggle.setText("取词模式已开启 ✓")
-        self._tray.showMessage("QuickDict", "取词模式已开启", QSystemTrayIcon.MessageIcon.Information, 1000)
+        self._tray.set_capture_enabled(True)
+        self._tray.show_message("QuickDict", "取词模式已开启")
 
     def _on_deactivate(self):
         self._poll_timer.stop()
         self._popup.hide_popup()
         self._last_word = None
-        self._action_toggle.setText("取词模式已关闭")
+        self._tray.set_capture_enabled(False)
+
+    def _on_tray_toggle(self):
+        """托盘菜单点击「开启/关闭取词」→ 切换 HotkeyListener 状态。"""
+        if self._hotkey.is_active:
+            self._hotkey.stop()
+            self._on_deactivate()
+            self._tray.show_message("QuickDict", "取词已关闭，快捷键已停用")
+        else:
+            self._hotkey.start()
+            self._tray.set_capture_enabled(False)
+            self._tray.show_message("QuickDict", "快捷键已开启，连按 Ctrl×2 取词")
 
     # ── 取词轮询 ──────────────────────────────────────────
 
