@@ -371,8 +371,8 @@ class LoadingDot(QWidget):
         self._pulse.setLoopCount(-1)  # 无限循环
 
     def show_at(self, x: int, y: int):
-        """在指定坐标（鼠标位置）右下方显示加载指示。"""
-        self.move(x + 12, y + 14)
+        """将圆点中心对齐到取词坐标，让用户看到精确的取词位置。"""
+        self.move(x - self._WINDOW // 2, y - self._WINDOW // 2)
         self.setWindowOpacity(1.0)
         self.show()
         self._pulse.start()
