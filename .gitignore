@@ -1,3 +1,22 @@
 __pycache__
 
 /.vscode/*
+
+.venv/
+venv/
+
+temp/
+
+stardict/
+
+
+*.db
+*.db-wal
+*.log
+*.db-shm
+
+release/
+dist/
+build/
+
+data/
