@@ -31,6 +31,7 @@ class TrayManager(QObject):
     sig_toggle_capture = pyqtSignal()
     sig_capture_mode_changed = pyqtSignal(str)  # "auto" / "uia" / "ocr"
     sig_trigger_mode_changed = pyqtSignal(str)  # "hover" / "ctrl"
+    sig_toggle_debug_region = pyqtSignal(bool)   # 显示/隐藏截图区域框
     sig_open_settings = pyqtSignal()
     sig_open_history = pyqtSignal()
     sig_quit = pyqtSignal()
@@ -75,6 +76,12 @@ class TrayManager(QObject):
         self._trigger_actions["ctrl"].setChecked(True)
 
         self._menu.addSeparator()
+        self._action_debug_region = self._menu.addAction("显示截图区域")
+        self._action_debug_region.setCheckable(True)
+        self._action_debug_region.setChecked(False)
+        self._action_debug_region.triggered.connect(
+            lambda checked: self.sig_toggle_debug_region.emit(checked)
+        )
         self._action_history = self._menu.addAction("查词历史（暂不支持）")
         self._action_history.setEnabled(False)
         self._action_settings = self._menu.addAction("设置（暂不支持）")

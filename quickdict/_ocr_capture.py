@@ -6,6 +6,7 @@ _ocr_capture.py — OCR 截屏取词。
 不含 UI Automation 逻辑或弹窗逻辑。
 """
 import ctypes
+import ctypes.wintypes
 import re
 
 from quickdict._word_utils import clean_word, extract_word_at_position
@@ -32,6 +33,42 @@ def _get_screen_scale() -> float:
         return dpi / 96.0
     except Exception:
         return 1.0
+
+
+def _get_monitor_info(x: int, y: int) -> tuple[int, int, int]:
+    """获取坐标所在显示器的索引和左上角偏移。
+
+    使用 Win32 EnumDisplayMonitors 枚举所有显示器，
+    找到包含 (x, y) 的那个，返回 (output_idx, left, top)。
+    找不到则默认返回主显示器 (0, 0, 0)。
+    """
+    try:
+        monitors: list[tuple[int, int, int, int]] = []
+
+        def _callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+            r = lprcMonitor.contents
+            monitors.append((r.left, r.top, r.right, r.bottom))
+            return True
+
+        MONITORENUMPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.wintypes.HMONITOR,
+            ctypes.wintypes.HDC,
+            ctypes.POINTER(ctypes.wintypes.RECT),
+            ctypes.wintypes.LPARAM,
+        )
+        ctypes.windll.user32.EnumDisplayMonitors(
+            None, None, MONITORENUMPROC(_callback), 0,
+        )
+
+        for idx, (ml, mt, mr, mb) in enumerate(monitors):
+            if ml <= x < mr and mt <= y < mb:
+                return idx, ml, mt
+
+    except Exception:
+        pass
+
+    return 0, 0, 0
 
 
 class OcrCapture:
@@ -94,18 +131,80 @@ class OcrCapture:
 
     # ── 截图 ──────────────────────────────────────────────
 
+    _BLACK_THRESHOLD = 5  # 像素均值低于此视为黑屏（硬件加速遮挡）
+
     @staticmethod
     def _grab_region(x: int, y: int):
-        """截取鼠标周围区域（DPI 自适应），返回 (PIL Image, half_w, half_h) 或 (None, 0, 0)。"""
+        """截取鼠标周围区域（DPI 自适应，多显示器安全）。
+
+        优先使用 PIL.ImageGrab（GDI BitBlt），若截到黑屏
+        则回退到 dxcam（DXGI Desktop Duplication），兼容
+        Teams 等硬件加速渲染窗口。
+
+        返回 (PIL Image, half_w, half_h) 或 (None, 0, 0)。
+        """
         try:
             from PIL import ImageGrab
+            import numpy as np
+
             scale = _get_screen_scale()
             hw = int(_HALF_W * scale)
             hh = int(_HALF_H * scale)
-            bbox = (x - hw, y - hh, x + hw, y + hh)
-            img = ImageGrab.grab(bbox=bbox)
-            return img, img.width // 2, img.height // 2
+            left = x - hw
+            top = y - hh
+            right = x + hw
+            bottom = y + hh
+
+            # all_screens=True 支持负坐标（多显示器左侧/上方扩展屏）
+            img = ImageGrab.grab(bbox=(left, top, right, bottom),
+                                all_screens=True)
+            arr = np.array(img)
+
+            if arr.mean() > OcrCapture._BLACK_THRESHOLD:
+                return img, img.width // 2, img.height // 2
+
+            # GDI 截图黑屏 → 回退 dxcam（DXGI）
+            logger.debug("GDI 截图黑屏，回退 dxcam")
+            return OcrCapture._grab_region_dxcam(x, y, hw, hh)
         except Exception:
+            return None, 0, 0
+
+    @staticmethod
+    def _grab_region_dxcam(x: int, y: int, hw: int, hh: int):
+        """使用 dxcam (DXGI Desktop Duplication) 截图（多显示器安全）。
+
+        适用于硬件加速渲染窗口（Teams、部分浏览器等）。
+        自动检测鼠标所在显示器，转换为显示器本地坐标。
+        返回 (PIL Image, half_w, half_h) 或 (None, 0, 0)。
+        """
+        try:
+            import dxcam
+            from PIL import Image
+
+            # 检测鼠标所在显示器及其本地坐标偏移
+            monitor_idx, mon_left, mon_top = _get_monitor_info(x, y)
+
+            # 全局坐标 → 显示器本地坐标
+            local_x = x - mon_left
+            local_y = y - mon_top
+            region = (
+                max(0, local_x - hw),
+                max(0, local_y - hh),
+                local_x + hw,
+                local_y + hh,
+            )
+
+            cam = dxcam.create(output_idx=monitor_idx)
+            frame = cam.grab(region=region)
+            del cam
+
+            if frame is None:
+                return None, 0, 0
+
+            img = Image.fromarray(frame)
+            return img, img.width // 2, img.height // 2
+        except Exception as e:
+            logger.debug("dxcam 截图失败: %s", e)
             return None, 0, 0
 
     # ── OCR 识别 ──────────────────────────────────────────

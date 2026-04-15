@@ -18,6 +18,7 @@ from quickdict.word_capture import WordCapture, CaptureMode
 from quickdict.popup_widget import PopupWidget, LoadingDot
 from quickdict.app import TrayManager
 from quickdict._lookup_worker import LookupWorker
+from quickdict._capture_overlay import CaptureRegionOverlay
 
 
 # ── pynput 线程 → Qt 主线程桥接 ───────────────────────────
@@ -60,6 +61,8 @@ class QuickDictApp(QObject):
         # 翻译弹窗
         self._popup = PopupWidget()
         self._loading = LoadingDot()
+        self._region_overlay = CaptureRegionOverlay()
+        self._show_region = False  # 截图区域框开关
 
         # 后台查询线程（sqlite3 连接必须在使用线程中创建）
         self._worker = LookupWorker(db_path)
@@ -106,6 +109,7 @@ class QuickDictApp(QObject):
         self._tray.sig_toggle_capture.connect(self._on_tray_toggle)
         self._tray.sig_capture_mode_changed.connect(self._on_capture_mode_changed)
         self._tray.sig_trigger_mode_changed.connect(self._on_trigger_mode_changed)
+        self._tray.sig_toggle_debug_region.connect(self._on_toggle_debug_region)
         self._tray.sig_quit.connect(self._quit)
         self._tray.set_capture_mode_checked(saved_mode_key)
         self._tray.set_trigger_mode_checked(self._trigger_mode)
@@ -130,6 +134,7 @@ class QuickDictApp(QObject):
         self._poll_timer.stop()
         self._settle_timer.stop()
         self._loading.hide_dot()
+        self._region_overlay.hide_box()
         self._popup.hide_popup()
         self._last_word = None
         self._anchor_pos = None
@@ -181,6 +186,12 @@ class QuickDictApp(QObject):
         label = self._TRIGGER_LABELS.get(mode_key, mode_key)
         self._tray.show_message("QECDict", f"触发方式: {label}", 500)
 
+    def _on_toggle_debug_region(self, enabled: bool):
+        """托盘菜单切换「显示截图区域」。"""
+        self._show_region = enabled
+        if not enabled:
+            self._region_overlay.hide_box()
+
     def _on_ctrl_capture(self):
         """Ctrl 键取词：在当前鼠标位置立即取词。"""
         if self._trigger_mode != "ctrl":
@@ -188,6 +199,8 @@ class QuickDictApp(QObject):
 
         x, y = self._get_cursor_pos()
         self._loading.show_at(x, y)
+        if self._show_region:
+            self._region_overlay.show_at(x, y)
 
         word = self._capture.capture(x, y)
 
@@ -246,6 +259,8 @@ class QuickDictApp(QObject):
 
         # 显示加载指示
         self._loading.show_at(x, y)
+        if self._show_region:
+            self._region_overlay.show_at(x, y)
 
         word = self._capture.capture(x, y)
 
