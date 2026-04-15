@@ -9,14 +9,15 @@ import ctypes
 import re
 
 from quickdict._word_utils import clean_word, extract_word_at_position
+from quickdict._ocr_preprocess import preprocess_variants
 from quickdict.config import logger
 
 # 截图区域：鼠标周围的半宽/半高（逻辑像素，会根据 DPI 缩放）
-_HALF_W = 160
-_HALF_H = 60
+_HALF_W = 200
+_HALF_H = 80
 
 # OCR 置信度阈值
-_MIN_CONFIDENCE = 0.35
+_MIN_CONFIDENCE = 0.25
 
 # 结果框到鼠标中心的最大距离（像素），超出则忽略
 _MAX_BOX_DISTANCE = 200
@@ -46,7 +47,8 @@ class OcrCapture:
         """
         截取 (x, y) 周围区域并 OCR 识别，返回鼠标位置处的英文单词。
 
-        如果 RapidOCR 未安装或识别失败，返回 None。
+        截图一次，生成多种预处理变体，依次识别直到首个有效结果。
+        如果 RapidOCR 未安装或所有变体均识别失败，返回 None。
         """
         if not self._ensure_available():
             return None
@@ -55,12 +57,18 @@ class OcrCapture:
         if img is None:
             return None
 
-        results = self._recognize(img)
-        if not results:
-            return None
+        variants = preprocess_variants(img)
+        for idx, variant in enumerate(variants):
+            results = self._recognize(variant)
+            if not results:
+                continue
+            word = self._pick_word(results, hw, hh)
+            if word:
+                logger.debug("OCR 命中变体№%d → %s", idx + 1, word)
+                return word
 
-        # 鼠标在截图中的相对坐标（截图中心）
-        return self._pick_word(results, hw, hh)
+        logger.debug("OCR 所有变体均未命中")
+        return None
 
     # ── 懒加载 ────────────────────────────────────────────
 
@@ -72,7 +80,10 @@ class OcrCapture:
             return True
         try:
             from rapidocr_onnxruntime import RapidOCR
-            self._ocr = RapidOCR()
+            self._ocr = RapidOCR(
+                det_box_thresh=0.3,
+                det_unclip_ratio=2.0,
+            )
             self._available = True
             logger.info("OCR 引擎已加载")
             return True

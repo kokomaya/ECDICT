@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 # ── 冻结/开发 环境检测 ────────────────────────────────────
 FROZEN = getattr(sys, "frozen", False)
