@@ -62,9 +62,9 @@ class QuickDictApp(QObject):
         self._popup = PopupWidget()
         self._loading = LoadingDot()
         self._region_overlay = CaptureRegionOverlay()
-        self._show_region = False  # 截图区域框开关
+        self._show_region = self._settings.get("show_region", False)
         self._status_indicator = StatusIndicator()
-        self._show_status = False  # 状态指示器开关
+        self._show_status = self._settings.get("show_status", False)
 
         # 后台查询线程（sqlite3 连接必须在使用线程中创建）
         self._worker = LookupWorker(db_path)
@@ -116,6 +116,8 @@ class QuickDictApp(QObject):
         self._tray.sig_quit.connect(self._quit)
         self._tray.set_capture_mode_checked(saved_mode_key)
         self._tray.set_trigger_mode_checked(self._trigger_mode)
+        self._tray.set_debug_region_checked(self._show_region)
+        self._tray.set_status_indicator_checked(self._show_status)
         self._tray.show()
 
         # 启动键盘监听
@@ -197,12 +199,16 @@ class QuickDictApp(QObject):
     def _on_toggle_debug_region(self, enabled: bool):
         """托盘菜单切换「显示截图区域」。"""
         self._show_region = enabled
+        self._settings["show_region"] = enabled
+        save_settings(self._settings)
         if not enabled:
             self._region_overlay.hide_box()
 
     def _on_toggle_status_indicator(self, enabled: bool):
         """托盘菜单切换「状态指示器」。"""
         self._show_status = enabled
+        self._settings["show_status"] = enabled
+        save_settings(self._settings)
         if enabled and self._hotkey.is_active:
             self._status_indicator.set_active(True)
             self._status_indicator.show()

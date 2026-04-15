@@ -48,6 +48,8 @@ _SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 _DEFAULTS = {
     "capture_mode": "ocr",  # auto / uia / ocr
     "trigger_mode": "ctrl",  # hover / ctrl
+    "show_region": False,     # 截图区域可视化
+    "show_status": False,     # 取词状态指示器
 }
 
 

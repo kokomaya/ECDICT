@@ -129,6 +129,14 @@ class TrayManager(QObject):
         if action:
             action.setChecked(True)
 
+    def set_debug_region_checked(self, checked: bool):
+        """设置截图区域菜单的选中状态。"""
+        self._action_debug_region.setChecked(checked)
+
+    def set_status_indicator_checked(self, checked: bool):
+        """设置状态指示器菜单的选中状态。"""
+        self._action_status_indicator.setChecked(checked)
+
     def show_message(self, title: str, message: str, duration_ms: int = 800):
         """显示轻量 toast 提示（半透明，自动淡出）。"""
         if not hasattr(self, "_toast") or self._toast is None:
