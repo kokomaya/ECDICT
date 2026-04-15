@@ -34,7 +34,8 @@ if errorlevel 1 (
 echo        OK
 
 REM ── 执行打包 ────────────────────────────────────────────
-echo [2/4] 打包 QuickDict.exe ...
+echo [2/4] 打包 QuickDict.exe (UPX 压缩) ...
+set PATH=%~dp0tools\upx-4.2.4-win64;%PATH%
 .venv\Scripts\pyinstaller quickdict.spec --noconfirm >nul 2>&1
 if errorlevel 1 (
     echo [错误] PyInstaller 打包失败
