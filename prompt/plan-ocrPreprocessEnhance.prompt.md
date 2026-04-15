@@ -33,8 +33,17 @@
 ---
 
 **Relevant files**
-- [quickdict/_ocr_capture.py](quickdict/_ocr_capture.py) — 主要修改: 预处理管线、多策略重试、参数调优
-- [quickdict/requirements.txt](quickdict/requirements.txt) — 添加 opencv-python
+- [quickdict/_ocr_capture.py](quickdict/_ocr_capture.py) — 截图调度 + 多策略重试 + dxcam 回退 + Y 加权选词
+- [quickdict/_ocr_preprocess.py](quickdict/_ocr_preprocess.py) — 图像预处理变体（8 种：原图/CLAHE/Otsu/自适应/形态学 + 2× 放大×3）
+- [quickdict/_capture_overlay.py](quickdict/_capture_overlay.py) — 截图区域可视化（调试开关）
+- [quickdict/requirements.txt](quickdict/requirements.txt) — opencv-python + dxcam
+
+**实施状态**
+- Phase 1 (预处理管线): ✅ 已完成
+- Phase 2 (参数调优): ✅ 已完成
+- Phase 3 (截图扩大): ✅ 已完成
+- Phase 4 (倾斜校正): ⬜ 待评估
+- 额外: dxcam 硬件加速窗口回退 ✅ | 多显示器坐标修复 ✅ | 2× 放大变体 ✅ | Y 加权选词 ✅
 
 **Verification**
 1. 准备困难场景截图（倾斜字幕、艺术字、下划线文字、复杂背景），对比 before/after

@@ -32,6 +32,7 @@ class TrayManager(QObject):
     sig_capture_mode_changed = pyqtSignal(str)  # "auto" / "uia" / "ocr"
     sig_trigger_mode_changed = pyqtSignal(str)  # "hover" / "ctrl"
     sig_toggle_debug_region = pyqtSignal(bool)   # 显示/隐藏截图区域框
+    sig_toggle_status_indicator = pyqtSignal(bool)  # 显示/隐藏状态指示器
     sig_open_settings = pyqtSignal()
     sig_open_history = pyqtSignal()
     sig_quit = pyqtSignal()
@@ -81,6 +82,12 @@ class TrayManager(QObject):
         self._action_debug_region.setChecked(False)
         self._action_debug_region.triggered.connect(
             lambda checked: self.sig_toggle_debug_region.emit(checked)
+        )
+        self._action_status_indicator = self._menu.addAction("状态指示器")
+        self._action_status_indicator.setCheckable(True)
+        self._action_status_indicator.setChecked(False)
+        self._action_status_indicator.triggered.connect(
+            lambda checked: self.sig_toggle_status_indicator.emit(checked)
         )
         self._action_history = self._menu.addAction("查词历史（暂不支持）")
         self._action_history.setEnabled(False)
@@ -238,3 +245,65 @@ class _ToastLabel(QLabel):
         self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._fade_anim.finished.connect(self.hide)
         self._fade_anim.start()
+
+
+# ── 常驻状态指示器 ────────────────────────────────────────
+
+class StatusIndicator(QLabel):
+    """屏幕右下角常驻小标签，指示取词模式是否激活。"""
+
+    _ACTIVE_BG = QColor(34, 139, 34, 200)    # 绿色
+    _INACTIVE_BG = QColor(120, 120, 120, 180) # 灰色
+    _TEXT_COLOR = QColor(255, 255, 255)
+    _BORDER_RADIUS = 4
+    _PADDING_H = 8
+    _PADDING_V = 3
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setFont(QFont("Microsoft YaHei", 9))
+        self._active = False
+        self._update_text()
+
+    def set_active(self, active: bool):
+        """更新取词状态。"""
+        self._active = active
+        self._update_text()
+        self._reposition()
+        self.update()
+
+    def _update_text(self):
+        self.setText("● 取词中" if self._active else "○ 取词关")
+
+    def _reposition(self):
+        fm = self.fontMetrics()
+        w = fm.horizontalAdvance(self.text()) + self._PADDING_H * 2
+        h = fm.height() + self._PADDING_V * 2
+        self.setFixedSize(w, h)
+        screen = QApplication.primaryScreen()
+        sr = screen.availableGeometry()
+        self.move(sr.right() - self.width() - 16,
+                  sr.bottom() - self.height() - 16)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = self._ACTIVE_BG if self._active else self._INACTIVE_BG
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self._BORDER_RADIUS, self._BORDER_RADIUS)
+        p.fillPath(path, QBrush(bg))
+        p.setPen(self._TEXT_COLOR)
+        p.setFont(self.font())
+        text_rect = self.rect().adjusted(self._PADDING_H, self._PADDING_V,
+                                         -self._PADDING_H, -self._PADDING_V)
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()

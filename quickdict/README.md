@@ -33,15 +33,19 @@ setup.bat
 quickdict/
   main.py           程序入口 & 主控制器
   config.py          路径常量 & 环境检测（开发/打包）
-  app.py             系统托盘管理（TrayManager）
+  app.py             系统托盘管理（TrayManager）、状态指示器（StatusIndicator）
   dict_engine.py     词典查询引擎（多级回退）
   hotkey.py          全局快捷键监听（双击 Ctrl）
-  word_capture.py    屏幕取词（UI Automation）
+  word_capture.py    屏幕取词（UI Automation + OCR）
   popup_widget.py    翻译弹窗 UI
+  _ocr_capture.py    OCR 截屏取词（多策略预处理 + dxcam 回退）
+  _ocr_preprocess.py 图像预处理变体生成（CLAHE/二值化/形态学/放大）
+  _capture_overlay.py 截图区域可视化（调试用）
   _formatter.py      词典数据格式化
   _word_utils.py     文本处理工具
   _db_importer.py    CSV 导入 SQLite
   _lemma_builder.py  Lemma 反查表构建
+  _lookup_worker.py  后台查词线程
   build_db.py        数据库构建 CLI
   assets/
     icon.png         托盘图标

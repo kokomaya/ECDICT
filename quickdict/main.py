@@ -16,7 +16,7 @@ from quickdict.config import logger
 from quickdict.hotkey import HotkeyListener
 from quickdict.word_capture import WordCapture, CaptureMode
 from quickdict.popup_widget import PopupWidget, LoadingDot
-from quickdict.app import TrayManager
+from quickdict.app import TrayManager, StatusIndicator
 from quickdict._lookup_worker import LookupWorker
 from quickdict._capture_overlay import CaptureRegionOverlay
 
@@ -63,6 +63,8 @@ class QuickDictApp(QObject):
         self._loading = LoadingDot()
         self._region_overlay = CaptureRegionOverlay()
         self._show_region = False  # 截图区域框开关
+        self._status_indicator = StatusIndicator()
+        self._show_status = False  # 状态指示器开关
 
         # 后台查询线程（sqlite3 连接必须在使用线程中创建）
         self._worker = LookupWorker(db_path)
@@ -110,6 +112,7 @@ class QuickDictApp(QObject):
         self._tray.sig_capture_mode_changed.connect(self._on_capture_mode_changed)
         self._tray.sig_trigger_mode_changed.connect(self._on_trigger_mode_changed)
         self._tray.sig_toggle_debug_region.connect(self._on_toggle_debug_region)
+        self._tray.sig_toggle_status_indicator.connect(self._on_toggle_status_indicator)
         self._tray.sig_quit.connect(self._quit)
         self._tray.set_capture_mode_checked(saved_mode_key)
         self._tray.set_trigger_mode_checked(self._trigger_mode)
@@ -129,6 +132,9 @@ class QuickDictApp(QObject):
         self._poll_timer.start()
         self._tray.set_capture_enabled(True)
         self._tray.show_message("QECDict", "取词模式已开启", 500)
+        if self._show_status:
+            self._status_indicator.set_active(True)
+            self._status_indicator.show()
 
     def _on_deactivate(self):
         self._poll_timer.stop()
@@ -139,6 +145,8 @@ class QuickDictApp(QObject):
         self._last_word = None
         self._anchor_pos = None
         self._tray.set_capture_enabled(False)
+        if self._show_status:
+            self._status_indicator.hide()
 
     def _on_tray_toggle(self):
         """托盘菜单点击「开启/关闭取词」→ 切换 HotkeyListener 状态。"""
@@ -191,6 +199,15 @@ class QuickDictApp(QObject):
         self._show_region = enabled
         if not enabled:
             self._region_overlay.hide_box()
+
+    def _on_toggle_status_indicator(self, enabled: bool):
+        """托盘菜单切换「状态指示器」。"""
+        self._show_status = enabled
+        if enabled and self._hotkey.is_active:
+            self._status_indicator.set_active(True)
+            self._status_indicator.show()
+        else:
+            self._status_indicator.hide()
 
     def _on_ctrl_capture(self):
         """Ctrl 键取词：在当前鼠标位置立即取词。"""
