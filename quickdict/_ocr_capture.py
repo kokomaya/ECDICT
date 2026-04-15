@@ -228,9 +228,13 @@ class OcrCapture:
     def _pick_word(results: list[tuple], cursor_rel_x: float,
                    cursor_rel_y: float) -> str | None:
         """
-        从 OCR 结果中找到距离鼠标最近的文本框，
-        再根据鼠标在框内的相对位置提取对应单词。
+        从 OCR 结果中找到鼠标所在文本框，提取对应单词。
+
+        优先选择光标落入框内的结果；若无，则选加权距离最近的框。
+        Y 方向加权 3 倍，确保同行文字优先于上下方文字。
         """
+        _Y_WEIGHT = 3.0  # Y 方向距离权重（优先同行）
+
         best_word: str | None = None
         best_dist = float("inf")
 
@@ -242,17 +246,21 @@ class OcrCapture:
             if not re.search(r"[a-zA-Z]{2,}", text):
                 continue
 
-            # 文本框中心
-            cx = sum(p[0] for p in box) / 4
-            cy = sum(p[1] for p in box) / 4
-            dist = ((cx - cursor_rel_x) ** 2 + (cy - cursor_rel_y) ** 2) ** 0.5
+            # 文本框边界
+            box_left = min(p[0] for p in box)
+            box_right = max(p[0] for p in box)
+            box_top = min(p[1] for p in box)
+            box_bottom = max(p[1] for p in box)
+
+            # 计算加权距离：光标在框内 → 距离为 0
+            dx = max(box_left - cursor_rel_x, 0, cursor_rel_x - box_right)
+            dy = max(box_top - cursor_rel_y, 0, cursor_rel_y - box_bottom)
+            dist = (dx ** 2 + (dy * _Y_WEIGHT) ** 2) ** 0.5
 
             if dist > _MAX_BOX_DISTANCE or dist >= best_dist:
                 continue
 
             # 鼠标在文本框内的相对 X 位置 → 字符位置
-            box_left = min(p[0] for p in box)
-            box_right = max(p[0] for p in box)
             box_width = box_right - box_left
 
             if box_width > 0 and len(text) > 0:
