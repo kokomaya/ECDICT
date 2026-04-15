@@ -133,10 +133,11 @@ class QuickDictApp(QObject):
         self._word_zone_radius = self._WORD_ZONE_BASE_PX
         self._poll_timer.start()
         self._tray.set_capture_enabled(True)
-        self._tray.show_message("QECDict", "取词模式已开启", 500)
         if self._show_status:
             self._status_indicator.set_active(True)
             self._status_indicator.show()
+        else:
+            self._tray.show_message("QECDict", "取词模式已开启", 500)
 
     def _on_deactivate(self):
         self._poll_timer.stop()
