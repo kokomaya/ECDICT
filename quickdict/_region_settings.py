@@ -16,25 +16,24 @@ from PyQt6.QtWidgets import (
 # ── 透视预览面板 ──────────────────────────────────────────
 
 class _PreviewPanel(QWidget):
-    """透视预览面板：显示对话框后方的真实屏幕内容，叠加截图区域填充效果。
-
-    用户可以直观地观察不同透明度在真实屏幕内容上的视觉效果。
-    """
+    """透视预览面板：1:1 显示实际截图区域大小，叠加真实屏幕内容。"""
 
     _BORDER_COLOR = QColor(67, 97, 238, 160)
+    _MARGIN = 30  # 区域框距面板边缘留白（像素）
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(300, 200)
         self._half_w = 200
         self._half_h = 80
         self._opacity = 15
         self._bg_pixmap: QPixmap | None = None
+        self._update_size()
 
     def set_params(self, half_w: int, half_h: int, opacity: int):
         self._half_w = half_w
         self._half_h = half_h
         self._opacity = opacity
+        self._update_size()
         self.update()
 
     def set_background(self, pixmap: QPixmap):
@@ -42,20 +41,22 @@ class _PreviewPanel(QWidget):
         self._bg_pixmap = pixmap
         self.update()
 
+    def _update_size(self):
+        """根据实际区域尺寸设置面板大小（1:1 + 留白）。"""
+        w = self._half_w * 2 + self._MARGIN * 2
+        h = self._half_h * 2 + self._MARGIN * 2
+        self.setFixedSize(w, h)
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         pw, ph = self.width(), self.height()
+        m = self._MARGIN
 
-        # 真实屏幕内容作为背景
+        # 真实屏幕内容作为背景（1:1 不缩放）
         if self._bg_pixmap and not self._bg_pixmap.isNull():
-            scaled = self._bg_pixmap.scaled(
-                pw, ph,
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            p.drawPixmap(0, 0, scaled)
+            p.drawPixmap(0, 0, self._bg_pixmap)
         else:
             p.fillRect(self.rect(), QColor(60, 60, 70))
             p.setPen(QColor(120, 120, 120))
@@ -64,26 +65,21 @@ class _PreviewPanel(QWidget):
             p.end()
             return
 
-        # 按比例缩放截图区域，使最大区域 (1000×600) 占面板 ~85%
-        scale = min(pw * 0.85 / 1000, ph * 0.85 / 600)
-        rw = self._half_w * 2 * scale
-        rh = self._half_h * 2 * scale
-        rx = (pw - rw) / 2
-        ry = (ph - rh) / 2
+        # 1:1 截图区域矩形（居中于面板）
+        rw = self._half_w * 2
+        rh = self._half_h * 2
+        rx = float(m)
+        ry = float(m)
         region_rect = QRectF(rx, ry, rw, rh)
 
         # 区域外加深——突出区域内的透视效果
         dim = QColor(0, 0, 0, 100)
-        # 上
         p.fillRect(QRectF(0, 0, pw, ry), dim)
-        # 下
         p.fillRect(QRectF(0, ry + rh, pw, ph - ry - rh), dim)
-        # 左
         p.fillRect(QRectF(0, ry, rx, rh), dim)
-        # 右
         p.fillRect(QRectF(rx + rw, ry, pw - rx - rw, rh), dim)
 
-        # 半透明填充叠加——真实效果预览
+        # 半透明填充叠加——真实 1:1 效果预览
         fill = QColor(67, 97, 238, self._opacity)
         p.fillRect(region_rect, fill)
 
@@ -136,7 +132,6 @@ class RegionSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("截图区域设置")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.setFixedWidth(360)
 
         self._init_half_w = half_w
         self._init_half_h = half_h
@@ -145,11 +140,12 @@ class RegionSettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
 
         # ── 透视预览 ──
         preview_row = QHBoxLayout()
         self._preview = _PreviewPanel()
-        preview_row.addWidget(self._preview, 1)
+        preview_row.addWidget(self._preview)
         layout.addLayout(preview_row)
 
         # ── 宽度 ──
@@ -243,6 +239,9 @@ class RegionSettingsDialog(QDialog):
     def _on_value_changed(self):
         self._sync_labels()
         self._sync_preview()
+        # 面板尺寸变化后需要重新裁剪背景（延迟一帧等布局更新完成）
+        if self._bg_ready:
+            QTimer.singleShot(0, self._apply_background)
 
     def _on_ok(self):
         self.sig_applied.emit(

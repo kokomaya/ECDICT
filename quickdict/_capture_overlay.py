@@ -31,10 +31,16 @@ class CaptureRegionOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
+
+        # 预渲染：在屏幕外闪一次，避免首次显示时白色闪烁
+        self.setGeometry(-1, -1, 1, 1)
+        self.show()
+        self.hide()
 
     def set_fill_opacity(self, alpha: int):
         """设置填充透明度 (0-255)。"""

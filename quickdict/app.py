@@ -85,18 +85,19 @@ class TrayManager(QObject):
             lambda checked: self.sig_toggle_debug_region.emit(checked)
         )
 
-        # ── 截图区域设置（打开独立对话框）────────────────────
-        self._action_region_settings = self._menu.addAction("截图区域设置…")
-        self._action_region_settings.triggered.connect(
-            lambda: self.sig_region_settings.emit()
-        )
-
         self._action_status_indicator = self._menu.addAction("状态指示器")
         self._action_status_indicator.setCheckable(True)
         self._action_status_indicator.setChecked(False)
         self._action_status_indicator.triggered.connect(
             lambda checked: self.sig_toggle_status_indicator.emit(checked)
         )
+
+        # ── 截图区域设置（打开独立对话框）────────────────────
+        self._action_region_settings = self._menu.addAction("截图区域设置…")
+        self._action_region_settings.triggered.connect(
+            lambda: self.sig_region_settings.emit()
+        )
+
         self._action_history = self._menu.addAction("查词历史（暂不支持）")
         self._action_history.setEnabled(False)
         self._action_settings = self._menu.addAction("设置（暂不支持）")
