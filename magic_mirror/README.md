@@ -1,0 +1,1 @@
+python -m magic_mirror.main --debug
