@@ -57,7 +57,7 @@
 ## 项目结构
 
 ```
-stream_translate/
+magic_mirror/
 │
 ├── __init__.py
 ├── main.py                      # 入口 & 应用控制器 (编排层)
@@ -455,8 +455,8 @@ MAX_FONT_SHRINK_RATIO = 0.6            # 最大字号缩小比例
 
 ```gitignore
 # StreamTranslate 敏感配置
-stream_translate/config/.env
-stream_translate/config/llm_providers.yaml
+magic_mirror/config/.env
+magic_mirror/config/llm_providers.yaml
 ```
 
 ---

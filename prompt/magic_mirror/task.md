@@ -10,11 +10,11 @@
 
 ### Task 1: 项目骨架搭建
 - **目标**：创建完整目录结构、配置框架、依赖文件
-- **产出文件**：`stream_translate/` 整体目录骨架
+- **产出文件**：`magic_mirror/` 整体目录骨架
 - **步骤**：
   1. 创建目录结构：
      ```
-     stream_translate/
+     magic_mirror/
      ├── __init__.py
      ├── main.py                 (空文件, 占位)
      ├── pipeline.py             (空文件, 占位)
@@ -68,8 +68,8 @@
      ```
   3. 在项目根目录 `.gitignore` 追加：
      ```
-     stream_translate/config/.env
-     stream_translate/config/llm_providers.yaml
+     magic_mirror/config/.env
+     magic_mirror/config/llm_providers.yaml
      ```
   4. 在 `.venv` 中安装新增依赖：`pip install openai python-dotenv pyyaml`
 - **验收**：目录结构完整；`import openai, dotenv, yaml` 不报错
@@ -94,7 +94,7 @@
   5. 实现 `interfaces/i_layout_engine.py` — `ILayoutEngine(Protocol)`：
      - `compute_layout(blocks: List[TranslatedBlock], screenshot: np.ndarray, screen_bbox: Tuple) -> List[RenderBlock]`
   6. 在 `interfaces/__init__.py` 中统一导出所有类型和协议
-- **验收**：`from stream_translate.interfaces import TextBlock, ITranslator` 等导入无报错；`mypy` 或 `pyright` 类型检查通过
+- **验收**：`from magic_mirror.interfaces import TextBlock, ITranslator` 等导入无报错；`mypy` 或 `pyright` 类型检查通过
 
 ---
 
@@ -443,7 +443,7 @@
      - 创建 `StreamTranslateApp`
      - `app.exec()`
   6. `if __name__ == "__main__": main()`
-- **验收**：运行 `python -m stream_translate.main`，按 `Ctrl+Alt+T`，拖拽框选英文区域，等待后该区域英文被中文覆盖替换，Esc 关闭覆盖层
+- **验收**：运行 `python -m magic_mirror.main`，按 `Ctrl+Alt+T`，拖拽框选英文区域，等待后该区域英文被中文覆盖替换，Esc 关闭覆盖层
 
 ---
 
@@ -563,7 +563,7 @@
 
 ### Task 30: 翻译历史记录
 - **目标**：保存每次翻译的原文和译文
-- **新增文件**：`stream_translate/history.py`
+- **新增文件**：`magic_mirror/history.py`
 - **步骤**：
   1. SQLite 存储：时间戳 + 原文列表 + 译文列表 + 截图缩略图(可选)
   2. 托盘菜单增加"历史记录"入口
@@ -572,7 +572,7 @@
 ### Task 31: QuickDict 集成
 - **目标**：与 QuickDict 主项目合并，共享基础设施
 - **步骤**：
-  1. 将 `stream_translate` 作为 QuickDict 的子功能
+  1. 将 `magic_mirror` 作为 QuickDict 的子功能
   2. 共享 OCR 引擎实例（避免重复加载模型）
   3. 热键不冲突：QuickDict `Ctrl×2` vs StreamTranslate `Ctrl+Alt+T`
   4. 共享系统托盘图标
