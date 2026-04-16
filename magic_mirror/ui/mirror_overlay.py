@@ -67,6 +67,26 @@ class MirrorOverlay(QWidget):
         self.update()
         self.show()
 
+    def init_geometry(self, screen_bbox: Tuple[int, int, int, int]) -> None:
+        """初始化覆盖层几何区域（用于流式渲染前的预备）。
+
+        设置窗口位置和大小并显示，但不绘制任何文本块。
+        后续通过 add_block() 增量添加内容。
+        """
+        self._render_blocks = []
+        self._win_x = screen_bbox[0]
+        self._win_y = screen_bbox[1]
+        self.setGeometry(
+            screen_bbox[0], screen_bbox[1],
+            screen_bbox[2], screen_bbox[3],
+        )
+        self.show()
+
+    def add_block(self, block: RenderBlock) -> None:
+        """增量添加一个渲染块并刷新显示。"""
+        self._render_blocks.append(block)
+        self.update()
+
     def close_overlay(self) -> None:
         """关闭并隐藏覆盖层。"""
         self._render_blocks = []

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 from magic_mirror.interfaces import (
     CaptureResult,
@@ -108,3 +108,45 @@ class TranslatePipeline:
         logger.debug("  computed %d render blocks", len(render_blocks))
 
         return render_blocks, result.screen_bbox
+
+    def execute_streaming_from_capture(
+        self,
+        capture_result: CaptureResult,
+        on_block_ready: Callable[[RenderBlock], None],
+    ) -> Tuple[int, int, int, int]:
+        """流式管线：OCR → 逐条翻译 → 逐条排版 → 回调。
+
+        每翻译完一条即计算该条的排版并通过 on_block_ready 回调通知调用方，
+        实现渐进渲染。
+
+        Args:
+            capture_result: 已截取的图像。
+            on_block_ready: 每个 RenderBlock 就绪时的回调。
+
+        Returns:
+            screen_bbox。
+        """
+        result = capture_result
+
+        # 步骤 2: OCR
+        logger.debug("Streaming pipeline step 2: recognize")
+        text_blocks = self._ocr.recognize(result.image)
+        logger.debug("  recognized %d text blocks", len(text_blocks))
+
+        if not text_blocks:
+            logger.info("OCR 未识别到文本")
+            return result.screen_bbox
+
+        # 步骤 3+4: 逐条翻译 + 排版
+        logger.debug("Streaming pipeline step 3+4: translate_stream + layout")
+        emitted = 0
+        for translated_block in self._translator.translate_stream(text_blocks):
+            render_blocks = self._layout.compute_layout(
+                [translated_block], result.image, result.screen_bbox,
+            )
+            for rb in render_blocks:
+                on_block_ready(rb)
+                emitted += 1
+
+        logger.debug("  streamed %d render blocks", emitted)
+        return result.screen_bbox

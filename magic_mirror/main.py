@@ -99,6 +99,35 @@ class _PipelineWorkerWithCapture(QRunnable):
             self.signals.error.emit(str(exc))
 
 
+class _StreamingPipelineWorker(QRunnable):
+    """流式管线工作线程：逐条翻译并通过信号通知 UI。"""
+
+    class Signals(QObject):
+        block_ready = pyqtSignal(object, tuple)     # (RenderBlock, screen_bbox)
+        finished = pyqtSignal(tuple)                 # screen_bbox
+        error = pyqtSignal(str)
+
+    def __init__(self, pipeline: TranslatePipeline, capture_result, screen_bbox) -> None:
+        super().__init__()
+        self.signals = self.Signals()
+        self._pipeline = pipeline
+        self._capture_result = capture_result
+        self._screen_bbox = screen_bbox
+
+    def run(self) -> None:
+        try:
+            def on_block(rb):
+                self.signals.block_ready.emit(rb, self._screen_bbox)
+
+            self._pipeline.execute_streaming_from_capture(
+                self._capture_result, on_block_ready=on_block,
+            )
+            self.signals.finished.emit(self._screen_bbox)
+        except Exception as exc:
+            logger.exception("流式管线执行失败")
+            self.signals.error.emit(str(exc))
+
+
 # ------------------------------------------------------------------
 # 热键工具
 # ------------------------------------------------------------------
@@ -259,33 +288,40 @@ class StreamTranslateApp(QObject):
 
         self._loading.show_at(bbox)
 
-        worker = _PipelineWorkerWithCapture(self._pipeline, capture_result)
-        worker.signals.finished.connect(self._on_pipeline_done)
+        # 创建覆盖层并初始化几何区域（流式渲染用）
+        overlay = MirrorOverlay()
+        overlay.init_geometry(bbox)
+        self._overlays.append(overlay)
+        self._current_overlay = overlay
+
+        worker = _StreamingPipelineWorker(
+            self._pipeline, capture_result, bbox,
+        )
+        worker.signals.block_ready.connect(self._on_block_ready)
+        worker.signals.finished.connect(self._on_streaming_done)
         worker.signals.error.connect(self._on_pipeline_error)
         self._current_worker = worker
         QThreadPool.globalInstance().start(worker)
 
-    @pyqtSlot(list, tuple)
-    def _on_pipeline_done(
-        self,
-        render_blocks: List[RenderBlock],
-        screen_bbox: tuple,
-    ) -> None:
+    @pyqtSlot(object, tuple)
+    def _on_block_ready(self, render_block, screen_bbox: tuple) -> None:
+        """流式渲染：每收到一个翻译块即增量显示。"""
+        if hasattr(self, '_current_overlay') and self._current_overlay:
+            self._current_overlay.add_block(render_block)
+
+    @pyqtSlot(tuple)
+    def _on_streaming_done(self, screen_bbox: tuple) -> None:
         self._loading.dismiss()
-        if render_blocks:
-            overlay = MirrorOverlay()
-            overlay.render(render_blocks, screen_bbox)
-            self._overlays.append(overlay)
-            logger.info(
-                "翻译完成，共 %d 个覆盖层 (Esc 关闭最近 / Ctrl+Shift+Esc 关闭全部)",
-                len(self._overlays),
-            )
-        else:
-            logger.info("无翻译结果")
+        self._current_overlay = None
+        logger.info(
+            "流式翻译完成，共 %d 个覆盖层 (Esc 关闭最近 / Ctrl+Shift+Esc 关闭全部)",
+            len(self._overlays),
+        )
 
     @pyqtSlot(str)
     def _on_pipeline_error(self, msg: str) -> None:
         self._loading.dismiss()
+        self._current_overlay = None
         logger.error("翻译失败: %s", msg)
 
     # ── 系统托盘 ──

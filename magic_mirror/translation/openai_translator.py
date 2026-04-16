@@ -2,12 +2,13 @@
 
 职责单一：只负责组装 API 请求并返回 TranslatedBlock 列表，
 Prompt 构建和响应解析委托给 prompt_templates 模块。
+支持流式翻译 (translate_stream) 和批量翻译 (translate)。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import httpx
 import openai
@@ -16,6 +17,7 @@ from magic_mirror.interfaces.types import TextBlock, TranslatedBlock
 from magic_mirror.translation.prompt_templates import (
     SYSTEM_PROMPT,
     build_user_prompt,
+    parse_stream_items,
     parse_translation_response,
 )
 
@@ -72,6 +74,25 @@ class OpenAITranslator:
 
         return self._build_results(blocks, numbered_texts, mapping)
 
+    def translate_stream(self, blocks: List[TextBlock]) -> Iterator[TranslatedBlock]:
+        """流式翻译：逐条 yield TranslatedBlock。
+
+        通过 streaming API 接收文本，增量解析 JSON 对象，
+        每解析出一条翻译即 yield。适用于渐进渲染场景。
+        流结束后补发漏掉的项。失败时回退为原文。
+        """
+        if not blocks:
+            return
+
+        numbered_texts = [(i + 1, block.text) for i, block in enumerate(blocks)]
+        user_prompt = build_user_prompt(numbered_texts)
+
+        try:
+            yield from self._stream_api(blocks, user_prompt)
+        except Exception as exc:
+            logger.error("流式翻译失败，回退为原文: %s", exc)
+            yield from self._fallback(blocks)
+
     # ------------------------------------------------------------------
     # 内部方法
     # ------------------------------------------------------------------
@@ -106,6 +127,59 @@ class OpenAITranslator:
             if delta.content:
                 chunks.append(delta.content)
         return "".join(chunks)
+
+    def _stream_api(
+        self,
+        blocks: List[TextBlock],
+        user_prompt: str,
+    ) -> Iterator[TranslatedBlock]:
+        """增量解析 streaming 响应，逐条 yield TranslatedBlock。"""
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            stream=True,
+        )
+
+        accumulated = ""
+        yielded_ids: set = set()
+
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if not delta.content:
+                continue
+            accumulated += delta.content
+
+            # 增量解析已完成的 JSON 对象
+            items = parse_stream_items(accumulated)
+            for item_id, zh in items.items():
+                if item_id in yielded_ids:
+                    continue
+                yielded_ids.add(item_id)
+                idx = item_id - 1
+                if 0 <= idx < len(blocks):
+                    yield TranslatedBlock(
+                        source=blocks[idx], translated_text=zh,
+                    )
+
+        # 流结束后最终解析，补发漏掉的项
+        final = parse_translation_response(accumulated)
+        for item_id, zh in final.items():
+            if item_id in yielded_ids:
+                continue
+            yielded_ids.add(item_id)
+            idx = item_id - 1
+            if 0 <= idx < len(blocks):
+                yield TranslatedBlock(
+                    source=blocks[idx], translated_text=zh,
+                )
+
+        # 未翻译的块回退为原文
+        for i, block in enumerate(blocks):
+            if (i + 1) not in yielded_ids:
+                yield TranslatedBlock(source=block, translated_text=block.text)
 
     @staticmethod
     def _build_results(

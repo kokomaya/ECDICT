@@ -108,3 +108,28 @@ def _try_parse_json(text: str) -> Dict[int, str] | None:
             mapping[int(item_id)] = str(zh)
 
     return mapping if mapping else None
+
+
+def parse_stream_items(accumulated: str) -> Dict[int, str]:
+    """从 streaming 累积文本中增量提取已完成的 JSON 对象。
+
+    在流式返回场景下，响应文本逐步增长。本函数用正则
+    匹配所有已完成的 ``{...}`` 对象并解析。
+
+    Args:
+        accumulated: 截至目前收到的全部响应文本。
+
+    Returns:
+        已解析的 {id: zh} 映射（可能为空）。
+    """
+    result: Dict[int, str] = {}
+    for match in re.finditer(r'\{[^{}]*\}', accumulated):
+        try:
+            obj = json.loads(match.group(0))
+            item_id = obj.get("id")
+            zh = obj.get("zh")
+            if item_id is not None and zh is not None:
+                result[int(item_id)] = str(zh)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            continue
+    return result
