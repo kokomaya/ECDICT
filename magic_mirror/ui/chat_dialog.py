@@ -1,13 +1,12 @@
-"""聊天对话框 — Claude Code 风格多轮对话 UI（支持 Markdown 富文本）。
+"""聊天对话框 — Claude Code 风格多轮对话 UI。
 
-职责单一：只负责聊天界面的展示与用户交互，
-聊天逻辑委托给 ChatSession，模型管理委托给 model_service，
-Markdown 渲染委托给 md_renderer。
+职责单一：只负责聊天界面的构建与用户交互，
+视觉主题委托给 chat_theme，内容渲染委托给 md_renderer，
+聊天逻辑委托给 ChatSession，模型管理委托给 model_service。
 """
 
 from __future__ import annotations
 
-import html as html_mod
 import logging
 from typing import List
 
@@ -20,9 +19,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -33,159 +29,20 @@ from magic_mirror.chat.model_service import (
     load_selected_model,
     save_selected_model,
 )
-from magic_mirror.ui.md_renderer import MESSAGE_CSS, render_markdown
+from magic_mirror.ui.chat_html_view import ChatHtmlView
+from magic_mirror.ui.chat_theme import (
+    BG_SIDEBAR,
+    BG_WINDOW,
+    BORDER,
+    CHAT_DIALOG_QSS,
+)
+from magic_mirror.ui.md_renderer import build_messages_html
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------
-# 色彩系统（Claude Code 风格：深色、沉稳、高对比度）
-# ------------------------------------------------------------------
-_BG_WINDOW = "#181825"
-_BG_CHAT = "#1e1e2e"
-_BG_INPUT = "#242438"
-_BG_SIDEBAR = "#1a1a2e"
-_BG_HUMAN = "#2a2a3e"         # 用户消息行
-_BG_AI = "transparent"        # AI 消息行
-_BG_SYSTEM = "#2c1a1a"
-_TEXT = "#cdd6f4"
-_TEXT_DIM = "#6c7086"
-_TEXT_HUMAN = "#89b4fa"        # 用户名标签
-_TEXT_AI = "#a6e3a1"           # AI 名标签
-_TEXT_ERR = "#f38ba8"
-_ACCENT = "#cba6f7"            # 紫色强调
-_ACCENT_DIM = "#45475a"
-_BORDER = "#313244"
-_INPUT_BORDER = "#45475a"
-_INPUT_FOCUS = "#cba6f7"
-_BTN_BG = "#cba6f7"
-_BTN_TEXT = "#1e1e2e"
-_BTN_HOVER = "#b4befe"
-_SCROLLBAR = "#45475a"
 
-_STYLE = f"""
-QDialog {{
-    background: {_BG_WINDOW};
-    color: {_TEXT};
-}}
-QLabel {{
-    background: transparent;
-    color: {_TEXT_DIM};
-}}
 
-/* ── 顶部栏 ── */
-QWidget#topBar {{
-    background: {_BG_WINDOW};
-    border-bottom: 1px solid {_BORDER};
-}}
-QLabel#logoLabel {{
-    color: {_ACCENT};
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 1px;
-}}
-QLabel#tokenBadge {{
-    color: {_TEXT_DIM};
-    font-size: 10px;
-    background: {_ACCENT_DIM};
-    border-radius: 9px;
-    padding: 2px 8px;
-}}
-QComboBox {{
-    background: {_BG_INPUT};
-    color: {_TEXT};
-    border: 1px solid {_BORDER};
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 11px;
-}}
-QComboBox:hover {{ border-color: {_ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 20px; }}
-QComboBox QAbstractItemView {{
-    background: {_BG_INPUT};
-    color: {_TEXT};
-    border: 1px solid {_BORDER};
-    selection-background-color: {_ACCENT_DIM};
-    outline: 0;
-}}
 
-/* ── 对话区 ── */
-QTextEdit#chatView {{
-    background: {_BG_CHAT};
-    border: none;
-    padding: 0;
-    selection-background-color: rgba(203,166,247,0.25);
-}}
-
-/* ── 输入区 ── */
-QPlainTextEdit#inputBox {{
-    background: {_BG_INPUT};
-    color: {_TEXT};
-    border: 1px solid {_INPUT_BORDER};
-    border-radius: 12px;
-    padding: 10px 14px;
-    font-size: 13px;
-    selection-background-color: rgba(203,166,247,0.3);
-}}
-QPlainTextEdit#inputBox:focus {{ border-color: {_INPUT_FOCUS}; }}
-
-QPushButton#sendBtn {{
-    background: {_BTN_BG};
-    color: {_BTN_TEXT};
-    border: none;
-    border-radius: 10px;
-    padding: 8px 22px;
-    font-size: 13px;
-    font-weight: 700;
-}}
-QPushButton#sendBtn:hover {{ background: {_BTN_HOVER}; }}
-QPushButton#sendBtn:disabled {{ background: {_ACCENT_DIM}; color: {_TEXT_DIM}; }}
-
-QPushButton#clearBtn {{
-    background: transparent;
-    color: {_TEXT_DIM};
-    border: 1px solid {_BORDER};
-    border-radius: 10px;
-    padding: 6px 14px;
-    font-size: 12px;
-}}
-QPushButton#clearBtn:hover {{ color: {_TEXT}; border-color: {_TEXT_DIM}; }}
-
-/* ── 侧栏 ── */
-QPlainTextEdit#ctxEdit {{
-    background: {_BG_SIDEBAR};
-    color: {_TEXT_DIM};
-    border: none;
-    padding: 8px;
-    font-size: 11px;
-    border-radius: 6px;
-}}
-
-/* ── 滚动条 ── */
-QScrollBar:vertical {{
-    background: transparent;
-    width: 6px;
-}}
-QScrollBar::handle:vertical {{
-    background: {_SCROLLBAR};
-    border-radius: 3px;
-    min-height: 30px;
-}}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-"""
-
-# 单条消息 HTML 模板
-_MSG_TEMPLATE = """\
-<div style="padding:10px 16px; margin:0; background:{bg}; border-bottom:1px solid #313244;">
-  <div style="margin-bottom:3px;">
-    <span style="color:{label_color}; font-weight:700; font-size:12px;">{icon} {label}</span>
-    {extra}
-  </div>
-  <div style="color:#cdd6f4; font-size:13px; line-height:1.6;">
-    {content}
-  </div>
-</div>
-"""
 
 
 # ------------------------------------------------------------------
@@ -242,7 +99,7 @@ class ChatDialog(QDialog):
         self.setMinimumSize(700, 540)
         self.resize(820, 640)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.setStyleSheet(_STYLE)
+        self.setStyleSheet(CHAT_DIALOG_QSS)
 
         self._context_text = context_text
         self._session: ChatSession | None = None
@@ -300,15 +157,13 @@ class ChatDialog(QDialog):
         body.setSpacing(0)
 
         # 对话区
-        self._chat = QTextEdit()
-        self._chat.setObjectName("chatView")
-        self._chat.setReadOnly(True)
+        self._chat = ChatHtmlView()
         body.addWidget(self._chat, 7)
 
         # 侧栏 — 原文参考
         sidebar = QWidget()
         sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet(f"background:{_BG_SIDEBAR}; border-left:1px solid {_BORDER};")
+        sidebar.setStyleSheet(f"background:{BG_SIDEBAR}; border-left:1px solid {BORDER};")
         sl = QVBoxLayout(sidebar)
         sl.setContentsMargins(10, 10, 10, 10)
         sl.setSpacing(6)
@@ -325,7 +180,7 @@ class ChatDialog(QDialog):
 
         # ── 底部输入栏 ──
         bottom = QWidget()
-        bottom.setStyleSheet(f"background:{_BG_WINDOW}; border-top:1px solid {_BORDER};")
+        bottom.setStyleSheet(f"background:{BG_WINDOW}; border-top:1px solid {BORDER};")
         bl = QHBoxLayout(bottom)
         bl.setContentsMargins(14, 8, 14, 10)
         bl.setSpacing(8)
@@ -452,7 +307,7 @@ class ChatDialog(QDialog):
         if self._session:
             self._session.clear_history()
         self._messages.clear()
-        self._chat.clear()
+        self._chat.clear_view()
         self._update_tokens()
 
     # ------------------------------------------------------------------
@@ -461,48 +316,10 @@ class ChatDialog(QDialog):
 
     def _render_all(self) -> None:
         """将所有消息渲染为 HTML 并更新 chat view。"""
-        parts: List[str] = [f"<style>{MESSAGE_CSS}</style>"]
-        for msg in self._messages:
-            parts.append(self._render_msg(msg))
-        # 流式光标指示
-        if self._streaming:
-            parts.append(
-                '<div style="padding:2px 18px; color:#6c7086; font-size:11px;">● generating…</div>'
-            )
-        full_html = "".join(parts)
-
-        # 保持滚动到底部
-        sb = self._chat.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 20
-        self._chat.setHtml(full_html)
-        if at_bottom:
-            sb.setValue(sb.maximum())
-
-    def _render_msg(self, msg: dict) -> str:
-        role = msg["role"]
-        text = msg["text"]
-
-        if role == "human":
-            escaped = html_mod.escape(text).replace("\n", "<br>")
-            return _MSG_TEMPLATE.format(
-                bg=_BG_HUMAN, label_color=_TEXT_HUMAN,
-                icon="❯", label="Human", extra="",
-                content=escaped,
-            )
-        elif role == "assistant":
-            rendered = render_markdown(text) if text else '<span style="color:#6c7086;">…</span>'
-            return _MSG_TEMPLATE.format(
-                bg=_BG_AI, label_color=_TEXT_AI,
-                icon="✦", label="Assistant", extra="",
-                content=rendered,
-            )
-        else:  # error
-            escaped = html_mod.escape(text)
-            return _MSG_TEMPLATE.format(
-                bg=_BG_SYSTEM, label_color=_TEXT_ERR,
-                icon="⚠", label="Error", extra="",
-                content=f'<span style="color:{_TEXT_ERR}">{escaped}</span>',
-            )
+        body_html = build_messages_html(
+            self._messages, streaming=self._streaming,
+        )
+        self._chat.set_messages_html(body_html)
 
     def _update_tokens(self) -> None:
         if self._session:
