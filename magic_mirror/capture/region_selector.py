@@ -51,7 +51,8 @@ class RegionSelector(QWidget):
         # 合并所有显示器的虚拟桌面几何
         virtual_geo = self._virtual_geometry()
         self.setGeometry(virtual_geo)
-        self.showFullScreen()
+        # 不用 showFullScreen()：它会忽略 setGeometry 强制铺满主屏幕
+        self.show()
         self.activateWindow()
         self.raise_()
 
