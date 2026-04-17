@@ -80,6 +80,11 @@ def parse_translation_response(response_text: str) -> Dict[int, str]:
         if result is not None:
             return result
 
+    # 策略 4: 正则逐条提取 id + zh（兜底：处理 LLM 输出含未转义引号等情况）
+    result = _extract_all_id_zh(response_text)
+    if result:
+        return result
+
     logger.warning("无法解析翻译响应: %s", response_text[:200])
     return {}
 
@@ -124,12 +129,49 @@ def parse_stream_items(accumulated: str) -> Dict[int, str]:
     """
     result: Dict[int, str] = {}
     for match in re.finditer(r'\{[^{}]*\}', accumulated):
+        block = match.group(0)
         try:
-            obj = json.loads(match.group(0))
+            obj = json.loads(block)
             item_id = obj.get("id")
             zh = obj.get("zh")
             if item_id is not None and zh is not None:
                 result[int(item_id)] = str(zh)
         except (json.JSONDecodeError, ValueError, KeyError):
-            continue
+            # json.loads 失败（如 zh 值含未转义引号），用正则提取
+            parsed = _extract_id_zh(block)
+            if parsed:
+                result[parsed[0]] = parsed[1]
+    return result
+
+
+# ------------------------------------------------------------------
+# 正则兜底提取
+# ------------------------------------------------------------------
+
+def _extract_id_zh(block: str) -> Tuple[int, str] | None:
+    """从单个 JSON 片段中用正则提取 id 和 zh 值。
+
+    当 json.loads 因 zh 值含未转义引号等问题失败时使用。
+    利用贪心匹配："zh": "..." 中最后一个 " 作为值的结束。
+    """
+    id_m = re.search(r'"id"\s*:\s*(\d+)', block)
+    # 贪心 .* 从 "zh": " 后第一个字符匹配到 block 中最后一个 "
+    zh_m = re.search(r'"zh"\s*:\s*"(.*)"', block, re.DOTALL)
+    if id_m and zh_m:
+        zh_val = zh_m.group(1).strip()
+        if zh_val:
+            return int(id_m.group(1)), zh_val
+    return None
+
+
+def _extract_all_id_zh(text: str) -> Dict[int, str]:
+    """从完整响应文本中用正则逐条提取所有 id + zh 对。
+
+    兜底策略：不依赖 json.loads，直接用正则匹配。
+    """
+    result: Dict[int, str] = {}
+    for match in re.finditer(r'\{[^{}]*\}', text):
+        parsed = _extract_id_zh(match.group(0))
+        if parsed:
+            result[parsed[0]] = parsed[1]
     return result

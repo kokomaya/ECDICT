@@ -177,6 +177,9 @@ class OpenAITranslator:
 
         # 流结束后最终解析，补发漏掉的项
         final = parse_translation_response(accumulated)
+        logger.debug("流式累积原文: %s", accumulated[:500])
+        logger.debug("流式已 yield IDs: %s, 最终解析 IDs: %s",
+                     sorted(yielded_ids), sorted(final.keys()))
         for item_id, zh in final.items():
             if item_id in yielded_ids:
                 continue
@@ -190,6 +193,8 @@ class OpenAITranslator:
         # 未翻译的块回退为原文
         for i, block in enumerate(blocks):
             if (i + 1) not in yielded_ids:
+                logger.warning("块 #%d 未翻译，回退原文: %s",
+                               i + 1, block.text[:80])
                 yield TranslatedBlock(source=block, translated_text=block.text)
 
     @staticmethod

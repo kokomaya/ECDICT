@@ -155,6 +155,8 @@ class TranslatePipeline:
         merged_blocks = _group_text_blocks(text_blocks)
         logger.debug("  grouped %d text blocks into %d paragraphs",
                      len(text_blocks), len(merged_blocks))
+        for i, mb in enumerate(merged_blocks):
+            logger.debug("  paragraph #%d: %s", i + 1, mb.text[:80])
 
         # 步骤 3+4: 逐段翻译 + 排版
         logger.debug("Streaming pipeline step 3+4: translate_stream + layout")
