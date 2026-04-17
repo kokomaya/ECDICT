@@ -100,10 +100,10 @@ class _PipelineWorkerWithCapture(QRunnable):
 
 
 class _OcrCopyWorker(QRunnable):
-    """OCR 提取文本并复制到剪贴板的工作线程。"""
+    """OCR 提取文本并计算渲染布局的工作线程。"""
 
     class Signals(QObject):
-        finished = pyqtSignal(str)   # 提取到的文本
+        finished = pyqtSignal(list)   # List[RenderBlock]
         error = pyqtSignal(str)
 
     def __init__(self, pipeline: TranslatePipeline, capture_result) -> None:
@@ -114,16 +114,24 @@ class _OcrCopyWorker(QRunnable):
 
     def run(self) -> None:
         try:
-            text_blocks = self._pipeline._ocr.recognize(self._capture_result.image)
+            from magic_mirror.interfaces.types import TranslatedBlock
+
+            image = self._capture_result.image
+            screen_bbox = self._capture_result.screen_bbox
+            text_blocks = self._pipeline._ocr.recognize(image)
             if not text_blocks:
-                self.signals.finished.emit("")
+                self.signals.finished.emit([])
                 return
-            # 按 Y 坐标排序，用换行拼接
-            sorted_blocks = sorted(
-                text_blocks, key=lambda b: min(pt[1] for pt in b.bbox),
+
+            # 将原文包装为 TranslatedBlock（translated_text = 原文）
+            pseudo_translated = [
+                TranslatedBlock(source=tb, translated_text=tb.text)
+                for tb in text_blocks
+            ]
+            render_blocks = self._pipeline._layout.compute_layout(
+                pseudo_translated, image, screen_bbox,
             )
-            text = "\n".join(b.text for b in sorted_blocks)
-            self.signals.finished.emit(text)
+            self.signals.finished.emit(render_blocks)
         except Exception as exc:
             logger.exception("OCR 提取失败")
             self.signals.error.emit(str(exc))
@@ -369,34 +377,44 @@ class StreamTranslateApp(QObject):
         QThreadPool.globalInstance().start(worker)
 
     def _run_ocr_copy(self, capture_result, bbox: tuple) -> None:
-        """OCR 提取模式：OCR → 复制到剪贴板。"""
+        """OCR 提取模式：OCR → 覆盖层展示原文（可右键复制）。"""
         self._loading.show_at(bbox, hint="识别中...")
 
+        overlay = MirrorOverlay()
+        overlay.init_geometry(bbox)
+        self._overlays.append(overlay)
+        self._current_overlay = overlay
+
         worker = _OcrCopyWorker(self._pipeline, capture_result)
-        worker.signals.finished.connect(self._on_ocr_copy_done)
+        worker.signals.finished.connect(
+            lambda blocks: self._on_ocr_copy_done(blocks, bbox),
+        )
         worker.signals.error.connect(self._on_ocr_copy_error)
         self._current_worker = worker
         QThreadPool.globalInstance().start(worker)
 
-    @pyqtSlot(str)
-    def _on_ocr_copy_done(self, text: str) -> None:
-        """OCR 提取完成 → 复制到剪贴板并通知用户。"""
+    @pyqtSlot()
+    def _on_ocr_copy_done(self, render_blocks: list, bbox: tuple) -> None:
+        """OCR 提取完成 → 在覆盖层展示原文。"""
         if self._loading.isVisible():
             self._loading.dismiss_immediately()
-        if text:
-            QApplication.clipboard().setText(text)
-            n_lines = text.count("\n") + 1
-            self._tray.showMessage(
-                "Magic Mirror", f"已复制 {n_lines} 行文本到剪贴板",
-                QSystemTrayIcon.MessageIcon.Information, 2000,
-            )
-            logger.info("OCR 提取完成，已复制 %d 行到剪贴板", n_lines)
-        else:
+
+        overlay = self._current_overlay
+        if not render_blocks:
+            # 未识别到文本，移除空覆盖层
+            if overlay in self._overlays:
+                self._overlays.remove(overlay)
+                overlay.deleteLater()
             self._tray.showMessage(
                 "Magic Mirror", "未识别到文本",
                 QSystemTrayIcon.MessageIcon.Warning, 2000,
             )
             logger.info("OCR 提取完成，未识别到文本")
+            return
+
+        for block in render_blocks:
+            overlay.add_block(block)
+        logger.info("OCR 提取完成，显示 %d 个文本块", len(render_blocks))
 
     @pyqtSlot(str)
     def _on_ocr_copy_error(self, msg: str) -> None:
