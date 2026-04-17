@@ -1,6 +1,7 @@
 PyQt6
 Pillow
 rapidocr-onnxruntime
+onnxruntime-directml
 opencv-python-headless
 numpy
 pynput

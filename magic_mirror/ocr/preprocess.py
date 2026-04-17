@@ -19,15 +19,12 @@ _UPSCALE_FACTOR = 2
 
 
 def generate_variants(image: np.ndarray) -> List[np.ndarray]:
-    """将 BGR 图像转换为少量高质量预处理变体。
+    """将 BGR 图像转换为预处理变体列表。
 
     返回 BGR numpy array 列表，按优先级排列。
-    每个变体独立 try/except，单个失败不影响其他。
 
-    变体策略（精简版，减少重复识别噪声）：
-        ①  原图 BGR
-        ②  灰度 + CLAHE 对比度增强
-        ③  2× 双三次放大（针对低分辨率文字）
+    当前策略：仅使用原图（GPU 加速后速度足够，多变体收益低）。
+    对低分辨率文字（行高 < 30px），额外添加 2× 放大变体。
 
     Args:
         image: BGR 格式 numpy 数组。
@@ -35,29 +32,19 @@ def generate_variants(image: np.ndarray) -> List[np.ndarray]:
     Returns:
         预处理变体列表（均为 BGR numpy 数组）。
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    variants: List[np.ndarray] = []
+    variants: List[np.ndarray] = [image]
 
-    # ① 原图
-    variants.append(image)
-
-    # ② CLAHE 对比度增强
-    try:
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        variants.append(cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR))
-    except Exception as e:
-        logger.debug("预处理变体② CLAHE 失败: %s", e)
-
-    # ③ 2× 双三次放大
-    try:
-        upscaled = cv2.resize(
-            image, None,
-            fx=_UPSCALE_FACTOR, fy=_UPSCALE_FACTOR,
-            interpolation=cv2.INTER_CUBIC,
-        )
-        variants.append(upscaled)
-    except Exception as e:
-        logger.debug("预处理变体③ 2x 放大失败: %s", e)
+    # 低分辨率图像补充 2× 放大变体
+    h = image.shape[0]
+    if h < 80:
+        try:
+            upscaled = cv2.resize(
+                image, None,
+                fx=_UPSCALE_FACTOR, fy=_UPSCALE_FACTOR,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            variants.append(upscaled)
+        except Exception as e:
+            logger.debug("2x 放大失败: %s", e)
 
     return variants

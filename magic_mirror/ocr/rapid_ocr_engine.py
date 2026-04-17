@@ -11,7 +11,11 @@ from typing import List
 
 import numpy as np
 
-from magic_mirror.config.settings import OCR_CONFIDENCE_THRESHOLD, OCR_DET_BOX_THRESH
+from magic_mirror.config.settings import (
+    OCR_CONFIDENCE_THRESHOLD,
+    OCR_DET_BOX_THRESH,
+    OCR_USE_GPU,
+)
 from magic_mirror.interfaces.types import TextBlock
 from magic_mirror.ocr.preprocess import generate_variants
 
@@ -99,9 +103,16 @@ class RapidOcrEngine:
             return True
         try:
             from rapidocr_onnxruntime import RapidOCR
-            self._ocr = RapidOCR(det_box_thresh=OCR_DET_BOX_THRESH)
+            use_dml = OCR_USE_GPU and _has_dml_provider()
+            self._ocr = RapidOCR(
+                det_box_thresh=OCR_DET_BOX_THRESH,
+                det_use_dml=use_dml,
+                cls_use_dml=use_dml,
+                rec_use_dml=use_dml,
+            )
             self._available = True
-            logger.info("OCR 引擎已加载")
+            backend = "DirectML (GPU)" if use_dml else "CPU"
+            logger.info("OCR 引擎已加载 (%s)", backend)
             return True
         except Exception as e:
             self._available = False
@@ -164,6 +175,15 @@ class RapidOcrEngine:
 # ------------------------------------------------------------------
 # 模块级辅助
 # ------------------------------------------------------------------
+
+def _has_dml_provider() -> bool:
+    """检测 ONNX Runtime 是否支持 DirectML。"""
+    try:
+        import onnxruntime
+        return "DmlExecutionProvider" in onnxruntime.get_available_providers()
+    except Exception:
+        return False
+
 
 def _bbox_to_rect(bbox: list) -> tuple:
     """四角坐标 → (x_min, y_min, x_max, y_max)。"""

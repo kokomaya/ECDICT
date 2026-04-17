@@ -7,6 +7,7 @@ HOTKEY_OCR_COPY = "ctrl+alt+c"         # OCR 提取原文并复制到剪贴板
 # ── OCR ──
 OCR_CONFIDENCE_THRESHOLD = 0.5
 OCR_DET_BOX_THRESH = 0.3
+OCR_USE_GPU = True                          # 启用 GPU 加速（DirectML，自动回退 CPU）
 
 # ── UI: 覆盖层 ──
 OVERLAY_OPACITY = 255                       # 覆盖层不透明度 (0-255)
