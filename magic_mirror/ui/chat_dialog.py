@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QFont, QKeyEvent
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSizeGrip,
     QVBoxLayout,
     QWidget,
 )
@@ -93,7 +94,11 @@ class ChatDialog(QDialog):
         self.setWindowTitle("Magic Mirror Chat")
         self.setMinimumSize(700, 540)
         self.resize(820, 640)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Dialog
+        )
         self.setStyleSheet(CHAT_DIALOG_QSS)
 
         self._context_text = context_text
@@ -122,28 +127,58 @@ class ChatDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── 顶部栏 ──
-        top = QWidget()
-        top.setObjectName("topBar")
-        top.setFixedHeight(42)
-        tb = QHBoxLayout(top)
-        tb.setContentsMargins(16, 0, 16, 0)
+        # ── 自定义标题栏（合并品牌 + 模型选择 + 窗口控制）──
+        title_bar = QWidget()
+        title_bar.setObjectName("titleBar")
+        title_bar.setFixedHeight(42)
+        tbl = QHBoxLayout(title_bar)
+        tbl.setContentsMargins(12, 0, 4, 0)
+        tbl.setSpacing(8)
 
-        title = QLabel("Magic Mirror")
-        title.setObjectName("titleLabel")
-        tb.addWidget(title)
-        tb.addStretch()
+        title_icon = QLabel("●")
+        title_icon.setObjectName("titleIcon")
+        tbl.addWidget(title_icon)
+
+        title_label = QLabel("Magic Mirror")
+        title_label.setObjectName("titleBarLabel")
+        tbl.addWidget(title_label)
+
+        tbl.addStretch()
 
         self._combo = QComboBox()
         self._combo.setMinimumWidth(180)
         self._combo.currentTextChanged.connect(self._on_model_changed)
-        tb.addWidget(self._combo)
+        tbl.addWidget(self._combo)
 
         self._token_badge = QLabel("0 tok")
         self._token_badge.setObjectName("tokenBadge")
-        tb.addWidget(self._token_badge)
+        tbl.addWidget(self._token_badge)
 
-        root.addWidget(top)
+        # 间隔
+        spacer = QWidget()
+        spacer.setFixedWidth(8)
+        spacer.setStyleSheet("background:transparent;")
+        tbl.addWidget(spacer)
+
+        btn_min = QPushButton("─")
+        btn_min.setObjectName("titleBtnMin")
+        btn_min.setFixedSize(32, 28)
+        btn_min.clicked.connect(self.showMinimized)
+        tbl.addWidget(btn_min)
+
+        btn_close = QPushButton("✕")
+        btn_close.setObjectName("titleBtnClose")
+        btn_close.setFixedSize(32, 28)
+        btn_close.clicked.connect(self.close)
+        tbl.addWidget(btn_close)
+
+        # 拖拽支持
+        self._drag_pos: QPoint | None = None
+        title_bar.mousePressEvent = self._title_mouse_press
+        title_bar.mouseMoveEvent = self._title_mouse_move
+        title_bar.mouseReleaseEvent = self._title_mouse_release
+
+        root.addWidget(title_bar)
 
         # ── 对话区（全宽，无侧栏）──
         self._chat = ChatHtmlView()
@@ -180,6 +215,26 @@ class ChatDialog(QDialog):
         il.addStretch(1)
 
         root.addWidget(input_bar)
+
+        # ── 右下角拖拽调整大小 ──
+        grip = QSizeGrip(self)
+        grip.setObjectName("sizeGrip")
+        grip.setFixedSize(12, 12)
+
+    # ------------------------------------------------------------------
+    # 标题栏拖拽
+    # ------------------------------------------------------------------
+
+    def _title_mouse_press(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def _title_mouse_move(self, event) -> None:
+        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def _title_mouse_release(self, event) -> None:
+        self._drag_pos = None
 
     # ------------------------------------------------------------------
     # 模型

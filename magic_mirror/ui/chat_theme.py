@@ -32,26 +32,54 @@ CHAT_DIALOG_QSS = f"""
 QDialog {{
     background: {BG_WINDOW};
     color: {TEXT};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
 }}
 QLabel {{
     background: transparent;
     color: {TEXT_DIM};
 }}
 
-/* ── 顶部栏 ── */
-QWidget#topBar {{
-    background: {BG_WINDOW};
+/* ── 自定义标题栏 ── */
+QWidget#titleBar {{
+    background: #1a1a1a;
     border-bottom: 1px solid {BORDER};
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
 }}
-QLabel#titleLabel {{
-    color: {TEXT};
+QLabel#titleIcon {{
+    color: #0078d7;
     font-size: 14px;
+    background: transparent;
+}}
+QLabel#titleBarLabel {{
+    color: {TEXT};
+    font-size: 13px;
     font-weight: 600;
+    background: transparent;
 }}
 QLabel#tokenBadge {{
     color: {TEXT_DIM};
     font-size: 10px;
+    background: transparent;
 }}
+QPushButton#titleBtnMin, QPushButton#titleBtnClose {{
+    background: transparent;
+    color: {TEXT_DIM};
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+}}
+QPushButton#titleBtnMin:hover {{
+    background: rgba(255, 255, 255, 0.1);
+    color: {TEXT};
+}}
+QPushButton#titleBtnClose:hover {{
+    background: #c42b1c;
+    color: #ffffff;
+}}
+
+/* ── 模型选择框 ── */
 QComboBox {{
     background: {BG_INPUT};
     color: {TEXT};
@@ -118,5 +146,11 @@ QScrollBar::handle:vertical {{
     min-height: 30px;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+
+/* ── 拖拽调整大小手柄 ── */
+QSizeGrip#sizeGrip {{
+    background: transparent;
+    width: 12px;
+    height: 12px;
+}}
 """
