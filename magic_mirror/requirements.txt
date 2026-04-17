@@ -9,3 +9,5 @@ dxcam
 openai
 python-dotenv
 pyyaml
+markdown
+pygments
