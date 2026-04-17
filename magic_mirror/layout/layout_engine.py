@@ -84,6 +84,12 @@ class DefaultLayoutEngine:
 
             final_w = max(merged_w, min(render_w, int(merged_w * _MAX_WIDTH_EXPAND)))
 
+            # 确保高度足够容纳中文文本（中文行高 > 英文行高）
+            font = QFont(FONT_FAMILY_ZH, font_size)
+            fm = QFontMetrics(font)
+            needed_h = fm.lineSpacing() * n_lines
+            final_h = max(merged_h, needed_h)
+
             # ── 颜色采样（用第一个块的 bbox 采样） ──
             bg_color = sample_background_color(screenshot, first_src.bbox)
             text_color = sample_text_color(screenshot, first_src.bbox, bg_color)
@@ -92,7 +98,7 @@ class DefaultLayoutEngine:
                 screen_x=sx,
                 screen_y=sy,
                 width=final_w,
-                height=merged_h,
+                height=final_h,
                 translated_text=merged_text,
                 font_size=font_size,
                 bg_color=bg_color,
@@ -276,20 +282,34 @@ def _fit_font_size(
 
     lines = text.split("\n")
 
+    def _fits(size: int) -> Tuple[bool, int]:
+        """检查字号是否在 bbox 内不溢出，返回 (是否fit, 最宽行宽)。"""
+        w = _max_line_width(lines, size)
+        if w > bbox_width:
+            return False, w
+        # 高度检查：中文行高 > 拉丁行高，必须用 QFontMetrics 精确测量
+        if bbox_height > 0:
+            font = QFont(FONT_FAMILY_ZH, size)
+            fm = QFontMetrics(font)
+            total_h = fm.lineSpacing() * len(lines)
+            if total_h > bbox_height:
+                return False, w
+        return True, w
+
     # 先检查 base_size 是否已经不溢出
-    max_w = _max_line_width(lines, base_size)
-    if max_w <= bbox_width:
+    ok, max_w = _fits(base_size)
+    if ok:
         return base_size, max_w
 
     # 二分查找：lo 不溢出或可能溢出，hi 一定溢出
     lo, hi = min_size, base_size
     best_size = min_size
-    best_w = _max_line_width(lines, min_size)
+    _, best_w = _fits(min_size)
 
     while lo <= hi:
         mid = (lo + hi) // 2
-        w = _max_line_width(lines, mid)
-        if w <= bbox_width:
+        ok, w = _fits(mid)
+        if ok:
             best_size = mid
             best_w = w
             lo = mid + 1

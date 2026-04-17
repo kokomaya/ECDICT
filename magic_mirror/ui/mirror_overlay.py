@@ -1,20 +1,25 @@
 """魔法镜子覆盖窗口 — 在屏幕上渲染翻译后的中文覆盖层。
 
-职责单一：只负责 RenderBlock 的屏幕绘制，
+职责单一：只负责 RenderBlock / 骨架屏的屏幕绘制，
 不涉及翻译逻辑、排版计算或颜色采样。
 支持多行文本（translated_text 可包含 \\n）。
+支持骨架屏占位：OCR 完成后显示灰色占位条，翻译到达后淡入替换。
 """
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from typing import List, Tuple
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QRectF, Qt, QVariantAnimation
 from PyQt6.QtGui import QColor, QFont, QPainter, QKeyEvent, QTextOption
 from PyQt6.QtWidgets import QWidget
 
 from magic_mirror.config.settings import FONT_FAMILY_ZH
-from magic_mirror.interfaces.types import RenderBlock, TextAlignment
+from magic_mirror.interfaces.types import RenderBlock, TextAlignment, TextBlock
+
+logger = logging.getLogger(__name__)
 
 # 映射 TextAlignment → Qt AlignmentFlag
 _ALIGN_MAP = {
@@ -22,6 +27,22 @@ _ALIGN_MAP = {
     TextAlignment.CENTER: Qt.AlignmentFlag.AlignHCenter,
     TextAlignment.RIGHT: Qt.AlignmentFlag.AlignRight,
 }
+
+# 骨架屏配色
+_SKELETON_BG = QColor(200, 200, 200, 180)
+_SKELETON_PULSE = QColor(180, 180, 180, 180)
+
+# 淡入动画时长 (ms)
+_FADE_IN_DURATION = 250
+
+
+@dataclass
+class _SkeletonRect:
+    """骨架屏占位矩形（局部坐标）。"""
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 class MirrorOverlay(QWidget):
@@ -38,6 +59,9 @@ class MirrorOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self._render_blocks: List[RenderBlock] = []
+        self._skeletons: List[_SkeletonRect] = []
+        self._block_opacity: float = 1.0           # 用于淡入动画
+        self._fade_anim: QVariantAnimation | None = None
         self._win_x = 0
         self._win_y = 0
 
@@ -50,13 +74,9 @@ class MirrorOverlay(QWidget):
         render_blocks: List[RenderBlock],
         screen_bbox: Tuple[int, int, int, int],
     ) -> None:
-        """显示覆盖层并渲染翻译文本块。
-
-        Args:
-            render_blocks: 可渲染的文本块列表。
-            screen_bbox: 截图对应的屏幕区域 (x, y, w, h)。
-        """
+        """显示覆盖层并渲染翻译文本块。"""
         self._render_blocks = render_blocks
+        self._skeletons = []
         self._win_x = screen_bbox[0]
         self._win_y = screen_bbox[1]
 
@@ -68,28 +88,71 @@ class MirrorOverlay(QWidget):
         self.show()
 
     def init_geometry(self, screen_bbox: Tuple[int, int, int, int]) -> None:
-        """初始化覆盖层几何区域（用于流式渲染前的预备）。
+        """初始化覆盖层几何区域（不显示窗口）。
 
-        设置窗口位置和大小并显示，但不绘制任何文本块。
-        后续通过 add_block() 增量添加内容。
+        仅设置窗口位置和大小，后续通过 set_skeletons / add_block 触发显示。
+        避免在 LoadingIndicator 可见期间 show()，防止 Windows Tool 窗口
+        所有权链导致覆盖层随 loading 一起被隐藏。
         """
         self._render_blocks = []
+        self._skeletons = []
         self._win_x = screen_bbox[0]
         self._win_y = screen_bbox[1]
         self.setGeometry(
             screen_bbox[0], screen_bbox[1],
             screen_bbox[2], screen_bbox[3],
         )
+
+    def set_skeletons(
+        self,
+        text_blocks: List[TextBlock],
+        screen_bbox: Tuple[int, int, int, int],
+    ) -> None:
+        """OCR 完成后显示灰色骨架占位条。
+
+        Args:
+            text_blocks: OCR 识别出的文本块列表（用其 bbox 计算位置）。
+            screen_bbox: 截图对应的屏幕区域 (x, y, w, h)。
+        """
+        screen_x0, screen_y0 = screen_bbox[0], screen_bbox[1]
+        self._skeletons = []
+        for tb in text_blocks:
+            xs = [pt[0] for pt in tb.bbox]
+            ys = [pt[1] for pt in tb.bbox]
+            left = int(min(xs))
+            top = int(min(ys))
+            w = max(int(max(xs)) - left, 1)
+            h = max(int(max(ys)) - top, 1)
+            # OCR bbox 是相对截图的，加上 screen_bbox 偏移后再减去窗口坐标
+            self._skeletons.append(_SkeletonRect(
+                x=screen_x0 + left - self._win_x,
+                y=screen_y0 + top - self._win_y,
+                w=w, h=h,
+            ))
         self.show()
+        self.raise_()
+        self.update()
 
     def add_block(self, block: RenderBlock) -> None:
-        """增量添加一个渲染块并刷新显示。"""
+        """增量添加一个渲染块，移除对应骨架并触发淡入。"""
+        # 移除与新块位置重叠的骨架
+        lx = block.screen_x - self._win_x
+        ly = block.screen_y - self._win_y
+        self._skeletons = [
+            s for s in self._skeletons
+            if not _rects_overlap(s.x, s.y, s.w, s.h, lx, ly, block.width, block.height)
+        ]
+
         self._render_blocks.append(block)
-        self.update()
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+        self._start_fade_in()
 
     def close_overlay(self) -> None:
         """关闭并隐藏覆盖层。"""
         self._render_blocks = []
+        self._skeletons = []
         self.hide()
 
     def clear(self) -> None:
@@ -97,49 +160,107 @@ class MirrorOverlay(QWidget):
         self.close_overlay()
 
     # ------------------------------------------------------------------
+    # 淡入动画
+    # ------------------------------------------------------------------
+
+    def _start_fade_in(self) -> None:
+        """对最新添加的块触发淡入效果。"""
+        # 停止上一个动画，避免多个动画争抢同一属性
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+
+        self._block_opacity = 0.0
+        anim = QVariantAnimation(self)
+        anim.setDuration(_FADE_IN_DURATION)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.valueChanged.connect(self._on_fade_tick)
+        anim.start()
+        self._fade_anim = anim
+
+    def _on_fade_tick(self, value) -> None:
+        """动画每帧回调：更新透明度并重绘。"""
+        self._block_opacity = float(value)
+        self.update()
+
+    # ------------------------------------------------------------------
     # Qt 事件
     # ------------------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        if not self._render_blocks:
-            return
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        for block in self._render_blocks:
-            # 屏幕绝对坐标 → 窗口局部坐标
-            lx = block.screen_x - self._win_x
-            ly = block.screen_y - self._win_y
-
-            # 背景矩形
-            bg = block.bg_color
+        # ── 绘制骨架占位条 ──
+        for skel in self._skeletons:
+            painter.fillRect(skel.x, skel.y, skel.w, skel.h, _SKELETON_BG)
+            # 内嵌一条略深的脉冲条模拟加载效果
+            pulse_w = max(skel.w // 3, 4)
             painter.fillRect(
-                lx, ly, block.width, block.height,
-                QColor(bg[0], bg[1], bg[2], bg[3]),
+                skel.x + 2, skel.y + 2,
+                pulse_w, max(skel.h - 4, 1),
+                _SKELETON_PULSE,
             )
 
-            # 字体
-            font = QFont(FONT_FAMILY_ZH, block.font_size)
-            painter.setFont(font)
+        if not self._render_blocks:
+            painter.end()
+            return
 
-            # 文字颜色
-            tc = block.text_color
-            painter.setPen(QColor(tc[0], tc[1], tc[2]))
-
-            # 根据对齐方式构建 QTextOption
-            h_align = _ALIGN_MAP.get(block.alignment, Qt.AlignmentFlag.AlignLeft)
-            text_opt = QTextOption(h_align | Qt.AlignmentFlag.AlignTop)
-            text_opt.setWrapMode(QTextOption.WrapMode.WordWrap)
-
-            # 绘制多行文本
-            rect = QRectF(lx, ly, block.width, block.height)
-            painter.drawText(rect, block.translated_text, text_opt)
+        # ── 绘制已翻译的文本块 ──
+        # 除最后一个块外用完整不透明度，最后一个块用动画不透明度
+        n = len(self._render_blocks)
+        for i, block in enumerate(self._render_blocks):
+            opacity = self._block_opacity if i == n - 1 else 1.0
+            self._paint_block(painter, block, opacity)
 
         painter.end()
+
+    def _paint_block(
+        self, painter: QPainter, block: RenderBlock, opacity: float,
+    ) -> None:
+        """绘制单个翻译文本块。"""
+        lx = block.screen_x - self._win_x
+        ly = block.screen_y - self._win_y
+
+        # 背景矩形（带不透明度调制）
+        bg = block.bg_color
+        a = int(bg[3] * opacity)
+        painter.fillRect(
+            lx, ly, block.width, block.height,
+            QColor(bg[0], bg[1], bg[2], a),
+        )
+
+        # 字体
+        font = QFont(FONT_FAMILY_ZH, block.font_size)
+        painter.setFont(font)
+
+        # 文字颜色（带不透明度）
+        tc = block.text_color
+        painter.setPen(QColor(tc[0], tc[1], tc[2], int(255 * opacity)))
+
+        # 根据对齐方式构建 QTextOption
+        h_align = _ALIGN_MAP.get(block.alignment, Qt.AlignmentFlag.AlignLeft)
+        text_opt = QTextOption(h_align | Qt.AlignmentFlag.AlignTop)
+        text_opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+
+        # 绘制多行文本
+        rect = QRectF(lx, ly, block.width, block.height)
+        painter.drawText(rect, block.translated_text, text_opt)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
             self.close_overlay()
         else:
             super().keyPressEvent(event)
+
+
+# ------------------------------------------------------------------
+# 辅助
+# ------------------------------------------------------------------
+
+def _rects_overlap(
+    x1: int, y1: int, w1: int, h1: int,
+    x2: int, y2: int, w2: int, h2: int,
+) -> bool:
+    """两个矩形是否有重叠区域。"""
+    return not (x1 + w1 <= x2 or x2 + w2 <= x1 or y1 + h1 <= y2 or y2 + h2 <= y1)

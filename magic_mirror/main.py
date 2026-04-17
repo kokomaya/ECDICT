@@ -103,6 +103,7 @@ class _StreamingPipelineWorker(QRunnable):
     """流式管线工作线程：逐条翻译并通过信号通知 UI。"""
 
     class Signals(QObject):
+        ocr_done = pyqtSignal(list, tuple)           # (text_blocks, screen_bbox)
         block_ready = pyqtSignal(object, tuple)     # (RenderBlock, screen_bbox)
         finished = pyqtSignal(tuple)                 # screen_bbox
         error = pyqtSignal(str)
@@ -119,8 +120,13 @@ class _StreamingPipelineWorker(QRunnable):
             def on_block(rb):
                 self.signals.block_ready.emit(rb, self._screen_bbox)
 
+            def on_ocr(text_blocks):
+                self.signals.ocr_done.emit(text_blocks, self._screen_bbox)
+
             self._pipeline.execute_streaming_from_capture(
-                self._capture_result, on_block_ready=on_block,
+                self._capture_result,
+                on_block_ready=on_block,
+                on_ocr_done=on_ocr,
             )
             self.signals.finished.emit(self._screen_bbox)
         except Exception as exc:
@@ -297,11 +303,23 @@ class StreamTranslateApp(QObject):
         worker = _StreamingPipelineWorker(
             self._pipeline, capture_result, bbox,
         )
+        worker.signals.ocr_done.connect(self._on_ocr_done)
         worker.signals.block_ready.connect(self._on_block_ready)
         worker.signals.finished.connect(self._on_streaming_done)
         worker.signals.error.connect(self._on_pipeline_error)
         self._current_worker = worker
         QThreadPool.globalInstance().start(worker)
+
+    @pyqtSlot(list, tuple)
+    def _on_ocr_done(self, text_blocks, screen_bbox: tuple) -> None:
+        """OCR 完成 → 立刻关闭 loading，显示骨架占位条。"""
+        # 必须立刻隐藏 loading（非动画），否则 overlay.show() 时 loading 仍可见，
+        # Windows 会将 loading 设为 overlay 的 native owner，
+        # loading 随后隐藏时 overlay 也被一并隐藏。
+        self._loading.dismiss_immediately()
+        if hasattr(self, '_current_overlay') and self._current_overlay:
+            self._current_overlay.set_skeletons(text_blocks, screen_bbox)
+        logger.debug("OCR 完成，显示 %d 个骨架占位条", len(text_blocks))
 
     @pyqtSlot(object, tuple)
     def _on_block_ready(self, render_block, screen_bbox: tuple) -> None:
@@ -311,7 +329,9 @@ class StreamTranslateApp(QObject):
 
     @pyqtSlot(tuple)
     def _on_streaming_done(self, screen_bbox: tuple) -> None:
-        self._loading.dismiss()
+        # 仅在 loading 仍可见时关闭（OCR 无文本时 _on_ocr_done 不触发）
+        if self._loading.isVisible():
+            self._loading.dismiss_immediately()
         self._current_overlay = None
         logger.info(
             "流式翻译完成，共 %d 个覆盖层 (Esc 关闭最近 / Ctrl+Shift+Esc 关闭全部)",
@@ -320,7 +340,8 @@ class StreamTranslateApp(QObject):
 
     @pyqtSlot(str)
     def _on_pipeline_error(self, msg: str) -> None:
-        self._loading.dismiss()
+        if self._loading.isVisible():
+            self._loading.dismiss_immediately()
         self._current_overlay = None
         logger.error("翻译失败: %s", msg)
 

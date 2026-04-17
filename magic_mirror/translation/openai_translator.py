@@ -87,11 +87,18 @@ class OpenAITranslator:
         numbered_texts = [(i + 1, block.text) for i, block in enumerate(blocks)]
         user_prompt = build_user_prompt(numbered_texts)
 
+        yielded_indices: set = set()
         try:
-            yield from self._stream_api(blocks, user_prompt)
+            for tb in self._stream_api(blocks, user_prompt):
+                idx = next((i for i, b in enumerate(blocks) if b is tb.source), None)
+                if idx is not None:
+                    yielded_indices.add(idx)
+                yield tb
         except Exception as exc:
-            logger.error("流式翻译失败，回退为原文: %s", exc)
-            yield from self._fallback(blocks)
+            logger.error("流式翻译失败，回退未翻译的块: %s", exc)
+            for i, block in enumerate(blocks):
+                if i not in yielded_indices:
+                    yield TranslatedBlock(source=block, translated_text=block.text)
 
     # ------------------------------------------------------------------
     # 内部方法
@@ -123,6 +130,8 @@ class OpenAITranslator:
         """从 streaming 响应中收集完整内容。"""
         chunks: List[str] = []
         for chunk in response:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 chunks.append(delta.content)
@@ -147,6 +156,8 @@ class OpenAITranslator:
         yielded_ids: set = set()
 
         for chunk in response:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if not delta.content:
                 continue

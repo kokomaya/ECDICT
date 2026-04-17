@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from magic_mirror.interfaces import (
     CaptureResult,
@@ -16,6 +16,7 @@ from magic_mirror.interfaces import (
     IScreenCapture,
     ITranslator,
     RenderBlock,
+    TextBlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ class TranslatePipeline:
         self,
         capture_result: CaptureResult,
         on_block_ready: Callable[[RenderBlock], None],
+        on_ocr_done: Optional[Callable[[List[TextBlock]], None]] = None,
     ) -> Tuple[int, int, int, int]:
         """流式管线：OCR → 逐条翻译 → 逐条排版 → 回调。
 
@@ -122,6 +124,7 @@ class TranslatePipeline:
         Args:
             capture_result: 已截取的图像。
             on_block_ready: 每个 RenderBlock 就绪时的回调。
+            on_ocr_done: OCR 完成后、翻译开始前的回调（用于骨架屏）。
 
         Returns:
             screen_bbox。
@@ -136,6 +139,10 @@ class TranslatePipeline:
         if not text_blocks:
             logger.info("OCR 未识别到文本")
             return result.screen_bbox
+
+        # 通知调用方 OCR 完成（用于显示骨架屏）
+        if on_ocr_done is not None:
+            on_ocr_done(text_blocks)
 
         # 步骤 3+4: 逐条翻译 + 排版
         logger.debug("Streaming pipeline step 3+4: translate_stream + layout")

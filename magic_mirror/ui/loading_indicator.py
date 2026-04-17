@@ -80,6 +80,15 @@ class LoadingIndicator(QWidget):
         # 保持引用防止被 GC
         self._fade_anim = anim
 
+    def dismiss_immediately(self) -> None:
+        """立刻隐藏指示器（无动画）。
+
+        用于在隐藏后紧接着要 show() 其他 Tool 窗口的场景，
+        避免 Windows 将本窗口设为新窗口的 native owner。
+        """
+        self._timer.stop()
+        self.hide()
+
     # ------------------------------------------------------------------
     # Qt 事件
     # ------------------------------------------------------------------
