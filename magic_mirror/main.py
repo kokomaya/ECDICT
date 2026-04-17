@@ -27,6 +27,7 @@ from magic_mirror.ocr.rapid_ocr_engine import RapidOcrEngine
 from magic_mirror.translation.provider_factory import create_translator_from_config
 from magic_mirror.ui.loading_indicator import LoadingIndicator
 from magic_mirror.ui.mirror_overlay import MirrorOverlay
+from magic_mirror.ui.text_overlay import TextOverlay
 
 logger = logging.getLogger(__name__)
 
@@ -377,10 +378,10 @@ class StreamTranslateApp(QObject):
         QThreadPool.globalInstance().start(worker)
 
     def _run_ocr_copy(self, capture_result, bbox: tuple) -> None:
-        """OCR 提取模式：OCR → 覆盖层展示原文（可右键复制）。"""
+        """OCR 提取模式：OCR → 覆盖层展示原文（可选中复制）。"""
         self._loading.show_at(bbox, hint="识别中...")
 
-        overlay = MirrorOverlay()
+        overlay = TextOverlay()
         overlay.init_geometry(bbox)
         self._overlays.append(overlay)
         self._current_overlay = overlay
