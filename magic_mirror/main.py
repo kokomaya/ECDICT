@@ -15,7 +15,7 @@ from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from magic_mirror.config import load_env, load_llm_config
-from magic_mirror.config.settings import HOTKEY_TRIGGER
+from magic_mirror.config.settings import HOTKEY_OCR_COPY, HOTKEY_TRIGGER
 from magic_mirror.interfaces.types import RenderBlock
 from magic_mirror.pipeline import TranslatePipeline
 
@@ -96,6 +96,36 @@ class _PipelineWorkerWithCapture(QRunnable):
             self.signals.finished.emit(render_blocks, screen_bbox)
         except Exception as exc:
             logger.exception("管线执行失败")
+            self.signals.error.emit(str(exc))
+
+
+class _OcrCopyWorker(QRunnable):
+    """OCR 提取文本并复制到剪贴板的工作线程。"""
+
+    class Signals(QObject):
+        finished = pyqtSignal(str)   # 提取到的文本
+        error = pyqtSignal(str)
+
+    def __init__(self, pipeline: TranslatePipeline, capture_result) -> None:
+        super().__init__()
+        self.signals = self.Signals()
+        self._pipeline = pipeline
+        self._capture_result = capture_result
+
+    def run(self) -> None:
+        try:
+            text_blocks = self._pipeline._ocr.recognize(self._capture_result.image)
+            if not text_blocks:
+                self.signals.finished.emit("")
+                return
+            # 按 Y 坐标排序，用换行拼接
+            sorted_blocks = sorted(
+                text_blocks, key=lambda b: min(pt[1] for pt in b.bbox),
+            )
+            text = "\n".join(b.text for b in sorted_blocks)
+            self.signals.finished.emit(text)
+        except Exception as exc:
+            logger.exception("OCR 提取失败")
             self.signals.error.emit(str(exc))
 
 
@@ -184,13 +214,19 @@ class StreamTranslateApp(QObject):
 
     # 用信号将热键线程的触发安全传回主线程
     _sig_hotkey_triggered = pyqtSignal()
+    _sig_ocr_copy_triggered = pyqtSignal()      # OCR 提取原文
     _sig_close_last_overlay = pyqtSignal()      # Esc 关闭最近一个覆盖层
     _sig_close_all_overlays = pyqtSignal()      # Ctrl+Shift+Esc 关闭全部
+
+    # 框选完成后的操作模式
+    _MODE_TRANSLATE = "translate"
+    _MODE_OCR_COPY = "ocr_copy"
 
     def __init__(self, pipeline: TranslatePipeline, parent: QObject | None = None) -> None:
         super().__init__(parent)
 
         self._pipeline = pipeline
+        self._pending_mode = self._MODE_TRANSLATE
 
         # UI 组件
         self._selector = RegionSelector()
@@ -200,13 +236,17 @@ class StreamTranslateApp(QObject):
         # 信号连接
         self._selector.sig_region_selected.connect(self._on_region_selected)
         self._sig_hotkey_triggered.connect(self._on_hotkey)
+        self._sig_ocr_copy_triggered.connect(self._on_ocr_copy_hotkey)
         self._sig_close_last_overlay.connect(self._close_last_overlay)
         self._sig_close_all_overlays.connect(self._close_all_overlays)
 
         # 热键监听
         self._hotkey_labels = _parse_hotkey(HOTKEY_TRIGGER)
+        self._ocr_copy_labels = _parse_hotkey(HOTKEY_OCR_COPY)
         self._pressed_labels: set = set()
-        logger.debug("注册热键: %s → 标签集 %s", HOTKEY_TRIGGER, self._hotkey_labels)
+        logger.debug("注册热键: %s → %s, %s → %s",
+                     HOTKEY_TRIGGER, self._hotkey_labels,
+                     HOTKEY_OCR_COPY, self._ocr_copy_labels)
         self._start_hotkey_listener()
 
         # 系统托盘
@@ -224,9 +264,14 @@ class StreamTranslateApp(QObject):
 
             # Ctrl+Alt+T → 新建翻译
             if self._hotkey_labels.issubset(self._pressed_labels):
-                logger.info("热键匹配! 触发框选")
+                logger.info("热键匹配! 触发翻译框选")
                 self._pressed_labels.clear()
                 self._sig_hotkey_triggered.emit()
+            # Ctrl+Alt+C → OCR 提取原文
+            elif self._ocr_copy_labels.issubset(self._pressed_labels):
+                logger.info("热键匹配! 触发 OCR 提取")
+                self._pressed_labels.clear()
+                self._sig_ocr_copy_triggered.emit()
             # Ctrl+Shift+Esc → 关闭全部覆盖层
             elif {"ctrl", "shift", "escape"}.issubset(self._pressed_labels):
                 logger.info("关闭全部覆盖层")
@@ -255,7 +300,14 @@ class StreamTranslateApp(QObject):
 
     @pyqtSlot()
     def _on_hotkey(self) -> None:
-        """热键触发 → 启动框选（保留已有覆盖层）。"""
+        """翻译热键触发 → 启动框选。"""
+        self._pending_mode = self._MODE_TRANSLATE
+        self._selector.start()
+
+    @pyqtSlot()
+    def _on_ocr_copy_hotkey(self) -> None:
+        """OCR 提取热键触发 → 启动框选（提取模式）。"""
+        self._pending_mode = self._MODE_OCR_COPY
         self._selector.start()
 
     @pyqtSlot()
@@ -282,21 +334,27 @@ class StreamTranslateApp(QObject):
     @pyqtSlot(QRect)
     def _on_region_selected(self, rect: QRect) -> None:
         bbox = (rect.x(), rect.y(), rect.width(), rect.height())
-        logger.info("区域选定: %s", bbox)
+        logger.info("区域选定: %s (模式=%s)", bbox, self._pending_mode)
 
         # 先截图再显示 loading，避免 loading 文字被 OCR 识别
-        from magic_mirror.interfaces.types import CaptureResult
         try:
             capture_result = self._pipeline._capture.capture(bbox)
         except Exception as exc:
             logger.error("截图失败: %s", exc)
             return
 
+        if self._pending_mode == self._MODE_OCR_COPY:
+            self._run_ocr_copy(capture_result, bbox)
+        else:
+            self._run_translate(capture_result, bbox)
+
+    def _run_translate(self, capture_result, bbox: tuple) -> None:
+        """翻译模式：OCR → 翻译 → 覆盖层渲染。"""
         self._loading.show_at(bbox)
 
-        # 创建覆盖层并初始化几何区域（流式渲染用）
         overlay = MirrorOverlay()
         overlay.init_geometry(bbox)
+        overlay.sig_retranslate.connect(self._on_retranslate)
         self._overlays.append(overlay)
         self._current_overlay = overlay
 
@@ -309,6 +367,47 @@ class StreamTranslateApp(QObject):
         worker.signals.error.connect(self._on_pipeline_error)
         self._current_worker = worker
         QThreadPool.globalInstance().start(worker)
+
+    def _run_ocr_copy(self, capture_result, bbox: tuple) -> None:
+        """OCR 提取模式：OCR → 复制到剪贴板。"""
+        self._loading.show_at(bbox)
+
+        worker = _OcrCopyWorker(self._pipeline, capture_result)
+        worker.signals.finished.connect(self._on_ocr_copy_done)
+        worker.signals.error.connect(self._on_ocr_copy_error)
+        self._current_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    @pyqtSlot(str)
+    def _on_ocr_copy_done(self, text: str) -> None:
+        """OCR 提取完成 → 复制到剪贴板并通知用户。"""
+        if self._loading.isVisible():
+            self._loading.dismiss_immediately()
+        if text:
+            QApplication.clipboard().setText(text)
+            n_lines = text.count("\n") + 1
+            self._tray.showMessage(
+                "Magic Mirror", f"已复制 {n_lines} 行文本到剪贴板",
+                QSystemTrayIcon.MessageIcon.Information, 2000,
+            )
+            logger.info("OCR 提取完成，已复制 %d 行到剪贴板", n_lines)
+        else:
+            self._tray.showMessage(
+                "Magic Mirror", "未识别到文本",
+                QSystemTrayIcon.MessageIcon.Warning, 2000,
+            )
+            logger.info("OCR 提取完成，未识别到文本")
+
+    @pyqtSlot(str)
+    def _on_ocr_copy_error(self, msg: str) -> None:
+        """OCR 提取失败。"""
+        if self._loading.isVisible():
+            self._loading.dismiss_immediately()
+        self._tray.showMessage(
+            "Magic Mirror", f"文本提取失败: {msg}",
+            QSystemTrayIcon.MessageIcon.Critical, 3000,
+        )
+        logger.error("OCR 提取失败: %s", msg)
 
     @pyqtSlot(list, tuple)
     def _on_ocr_done(self, text_blocks, screen_bbox: tuple) -> None:
@@ -345,6 +444,43 @@ class StreamTranslateApp(QObject):
         self._current_overlay = None
         logger.error("翻译失败: %s", msg)
 
+    # ── 重新翻译 ──
+
+    @pyqtSlot(tuple)
+    def _on_retranslate(self, bbox: tuple) -> None:
+        """覆盖层右键菜单「重新翻译」→ 清空当前覆盖层并重跑管线。"""
+        # 找到发信号的 overlay
+        overlay = self.sender()
+        if not isinstance(overlay, MirrorOverlay):
+            return
+
+        logger.info("重新翻译区域: %s", bbox)
+
+        # 清空已有内容，保留 overlay 对象
+        overlay._render_blocks.clear()
+        overlay._skeletons.clear()
+        overlay.update()
+
+        # 截图
+        try:
+            capture_result = self._pipeline._capture.capture(bbox)
+        except Exception as exc:
+            logger.error("重新翻译截图失败: %s", exc)
+            return
+
+        self._loading.show_at(bbox)
+        self._current_overlay = overlay
+
+        worker = _StreamingPipelineWorker(
+            self._pipeline, capture_result, bbox,
+        )
+        worker.signals.ocr_done.connect(self._on_ocr_done)
+        worker.signals.block_ready.connect(self._on_block_ready)
+        worker.signals.finished.connect(self._on_streaming_done)
+        worker.signals.error.connect(self._on_pipeline_error)
+        self._current_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
     # ── 系统托盘 ──
 
     def _setup_tray(self) -> None:
@@ -355,6 +491,12 @@ class StreamTranslateApp(QObject):
         act_translate = QAction("翻译区域 (Ctrl+Alt+T)", menu)
         act_translate.triggered.connect(self._on_hotkey)
         menu.addAction(act_translate)
+
+        act_ocr_copy = QAction("提取文本 (Ctrl+Alt+C)", menu)
+        act_ocr_copy.triggered.connect(self._on_ocr_copy_hotkey)
+        menu.addAction(act_ocr_copy)
+
+        menu.addSeparator()
 
         act_close_all = QAction("关闭全部覆盖层 (Ctrl+Shift+Esc)", menu)
         act_close_all.triggered.connect(self._close_all_overlays)

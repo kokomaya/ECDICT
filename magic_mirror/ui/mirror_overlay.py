@@ -1,6 +1,6 @@
 """魔法镜子覆盖窗口 — 在屏幕上渲染翻译后的中文覆盖层。
 
-职责单一：只负责 RenderBlock / 骨架屏的屏幕绘制，
+职责单一：只负责 RenderBlock / 骨架屏的屏幕绘制与右键交互，
 不涉及翻译逻辑、排版计算或颜色采样。
 支持多行文本（translated_text 可包含 \\n）。
 支持骨架屏占位：OCR 完成后显示灰色占位条，翻译到达后淡入替换。
@@ -8,13 +8,14 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 from dataclasses import dataclass
 from typing import List, Tuple
 
-from PyQt6.QtCore import QRectF, Qt, QVariantAnimation
+from PyQt6.QtCore import QByteArray, QRectF, Qt, QVariantAnimation, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QKeyEvent, QTextOption
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 from magic_mirror.config.settings import FONT_FAMILY_ZH
 from magic_mirror.interfaces.types import RenderBlock, TextAlignment, TextBlock
@@ -35,6 +36,10 @@ _SKELETON_PULSE = QColor(180, 180, 180, 180)
 # 淡入动画时长 (ms)
 _FADE_IN_DURATION = 250
 
+# Win32 常量 — 用于左键点击穿透
+_WM_NCHITTEST = 0x0084
+_HTTRANSPARENT = -1
+
 
 @dataclass
 class _SkeletonRect:
@@ -48,6 +53,9 @@ class _SkeletonRect:
 class MirrorOverlay(QWidget):
     """屏幕翻译覆盖层 — 无边框置顶透明窗口。"""
 
+    # 用户请求对此覆盖层区域重新翻译
+    sig_retranslate = pyqtSignal(tuple)   # screen_bbox (x, y, w, h)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowFlags(
@@ -56,7 +64,8 @@ class MirrorOverlay(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        # 不设置 WA_TransparentForMouseEvents：需要接收右键事件。
+        # 左键穿透通过 nativeEvent + WM_NCHITTEST 实现。
 
         self._render_blocks: List[RenderBlock] = []
         self._skeletons: List[_SkeletonRect] = []
@@ -187,6 +196,42 @@ class MirrorOverlay(QWidget):
     # Qt 事件
     # ------------------------------------------------------------------
 
+    def nativeEvent(self, event_type: QByteArray, message):  # noqa: N802
+        """Win32 级别左键穿透：非右键点击时返回 HTTRANSPARENT。
+
+        拦截 WM_NCHITTEST 消息，检查当前鼠标按键状态：
+        - 右键按下 → 不穿透（让 Qt 接收到 contextMenuEvent）
+        - 其他情况 → 返回 HTTRANSPARENT 让点击穿透到下方窗口
+        """
+        if event_type == b"windows_generic_MSG":
+            import ctypes.wintypes
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == _WM_NCHITTEST:
+                # GetAsyncKeyState(VK_RBUTTON=0x02)：最高位=1 表示当前被按下
+                if ctypes.windll.user32.GetAsyncKeyState(0x02) & 0x8000:
+                    return super().nativeEvent(event_type, message)
+                return True, _HTTRANSPARENT
+        return super().nativeEvent(event_type, message)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        """右键菜单：复制所有文本 / 重新翻译 / 关闭。"""
+        menu = QMenu(self)
+
+        act_copy = menu.addAction("复制全部译文")
+        act_copy.triggered.connect(self._copy_all_text)
+
+        menu.addSeparator()
+
+        act_retranslate = menu.addAction("重新翻译")
+        act_retranslate.triggered.connect(self._request_retranslate)
+
+        menu.addSeparator()
+
+        act_close = menu.addAction("关闭覆盖层")
+        act_close.triggered.connect(self.close_overlay)
+
+        menu.exec(event.globalPos())
+
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -252,6 +297,22 @@ class MirrorOverlay(QWidget):
             self.close_overlay()
         else:
             super().keyPressEvent(event)
+
+    # ------------------------------------------------------------------
+    # 右键菜单操作
+    # ------------------------------------------------------------------
+
+    def _copy_all_text(self) -> None:
+        """复制所有翻译文本到剪贴板。"""
+        texts = [b.translated_text for b in self._render_blocks]
+        if texts:
+            QApplication.clipboard().setText("\n".join(texts))
+            logger.debug("已复制 %d 段译文到剪贴板", len(texts))
+
+    def _request_retranslate(self) -> None:
+        """发射重新翻译信号。"""
+        bbox = (self._win_x, self._win_y, self.width(), self.height())
+        self.sig_retranslate.emit(bbox)
 
 
 # ------------------------------------------------------------------
