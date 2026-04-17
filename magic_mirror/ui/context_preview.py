@@ -31,6 +31,7 @@ class _TextPair:
     """一组原文+译文。"""
     source: str
     translated: str
+    sort_key: float = 0.0  # screen_y，用于按原文顺序排序
 
 
 class ContextPreviewPanel(QWidget):
@@ -108,9 +109,12 @@ class ContextPreviewPanel(QWidget):
             left_x = ox - _PANEL_WIDTH - _GAP
             self.setGeometry(max(left_x, screen_rect.left()), oy, _PANEL_WIDTH, panel_h)
 
-    def add_text(self, translated: str, source: str = "") -> None:
+    def add_text(self, translated: str, source: str = "",
+                  sort_key: float = 0.0) -> None:
         """增量添加一组原文+译文并刷新双语对照显示。"""
-        self._texts.append(_TextPair(source=source, translated=translated))
+        self._texts.append(_TextPair(
+            source=source, translated=translated, sort_key=sort_key,
+        ))
         self._refresh_display()
         # 滚动到底部
         sb = self._editor.verticalScrollBar()
@@ -130,6 +134,11 @@ class ContextPreviewPanel(QWidget):
         self._editor.clear()
         self.hide()
 
+    def sort_by_position(self) -> None:
+        """按 sort_key（screen_y）重新排列文本对，恢复原文顺序。"""
+        self._texts.sort(key=lambda p: p.sort_key)
+        self._refresh_display()
+
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
@@ -138,11 +147,17 @@ class ContextPreviewPanel(QWidget):
         """根据当前文本对列表重建富文本内容。"""
         html_parts: List[str] = []
         for pair in self._texts:
-            # 有原文、且原文与译文不同时才显示双语对照
             if pair.source and _text_differs(pair.source, pair.translated):
+                # 正常双语对照
                 html_parts.append(
                     f'<p style="color:rgba(180,180,180,200);margin:2px 0 0 0;">{_esc(pair.source)}</p>'
                     f'<p style="color:rgba(255,255,255,220);margin:0 0 6px 0;">{_esc(pair.translated)}</p>'
+                )
+            elif pair.source and _has_latin(pair.source) and not _text_differs(pair.source, pair.translated):
+                # 原文含英文但未翻译（回退为原文），标注提示
+                html_parts.append(
+                    f'<p style="color:rgba(180,180,180,200);margin:2px 0 0 0;">{_esc(pair.source)}</p>'
+                    f'<p style="color:rgba(255,160,100,200);margin:0 0 6px 0;">[未翻译]</p>'
                 )
             else:
                 html_parts.append(
@@ -204,3 +219,8 @@ def _normalize(text: str) -> str:
 def _text_differs(source: str, translated: str) -> bool:
     """源文本与译文是否实质不同（忽略空格/标点/大小写差异）。"""
     return _normalize(source) != _normalize(translated)
+
+
+def _has_latin(text: str) -> bool:
+    """文本是否包含拉丁字母（即英文内容）。"""
+    return bool(re.search(r"[A-Za-z]{2,}", text))

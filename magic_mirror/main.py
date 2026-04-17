@@ -453,6 +453,9 @@ class StreamTranslateApp(QObject):
         # 仅在 loading 仍可见时关闭（OCR 无文本时 _on_ocr_done 不触发）
         if self._loading.isVisible():
             self._loading.dismiss_immediately()
+        # 按原文位置重排预览面板
+        if hasattr(self, '_current_overlay') and self._current_overlay:
+            self._current_overlay.finalize_preview()
         self._current_overlay = None
         logger.info(
             "流式翻译完成，共 %d 个覆盖层 (Esc 关闭最近 / Ctrl+Shift+Esc 关闭全部)",

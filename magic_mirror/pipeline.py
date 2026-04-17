@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Callable, List, Optional, Tuple
 
 from magic_mirror.interfaces import (
@@ -247,9 +248,17 @@ def _should_merge_tb(a: TextBlock, b: TextBlock) -> bool:
 def _merge_tb_group(blocks: List[TextBlock]) -> TextBlock:
     """将一组 TextBlock 合并为单个段落级 TextBlock。"""
     if len(blocks) == 1:
+        text = _cleanup_ocr_text(blocks[0].text)
+        if text != blocks[0].text:
+            return TextBlock(
+                text=text,
+                bbox=blocks[0].bbox,
+                font_size_est=blocks[0].font_size_est,
+                confidence=blocks[0].confidence,
+            )
         return blocks[0]
 
-    combined_text = " ".join(b.text for b in blocks)
+    combined_text = _cleanup_ocr_text(" ".join(b.text for b in blocks))
 
     all_pts = [pt for b in blocks for pt in b.bbox]
     xs = [p[0] for p in all_pts]
@@ -270,3 +279,90 @@ def _merge_tb_group(blocks: List[TextBlock]) -> TextBlock:
         font_size_est=avg_font,
         confidence=min_conf,
     )
+
+
+# ------------------------------------------------------------------
+# OCR 文本清洗（合并后执行）
+# ------------------------------------------------------------------
+
+# PDF 断行连字符: "com- munication" → "communication"
+_RE_HYPHEN_BREAK = re.compile(r"(\w)- +(\w)")
+# 匹配 4+ 连续纯字母序列
+_RE_LONG_ALPHA = re.compile(r"[A-Za-z]{4,}")
+# 标点紧跟字母:  "data.The" → "data. The"
+_RE_PUNCT_WORD = re.compile(r"([.!?;,])([A-Za-z])")
+# 右括号紧跟字母 / 字母紧跟左括号
+_RE_PAREN_WORD = re.compile(r"(\))([A-Za-z])")
+_RE_WORD_PAREN = re.compile(r"([A-Za-z])(\()")
+
+
+def _cleanup_ocr_text(text: str) -> str:
+    """合并后的 OCR 文本清洗。
+
+    1. 修复 PDF 断行连字符（"com- munication" → "communication"）
+    2. 合并 OCR 音节碎片（"communi cation" → "communication"）
+    3. 修复标点-字母粘连
+    4. 用 wordninja 拆分粘连的多个单词
+    """
+    if not text or len(text) < 4:
+        return text
+
+    # 1. 修复断行连字符
+    t = _RE_HYPHEN_BREAK.sub(r"\1\2", text)
+
+    # 2. 合并音节碎片
+    t = _rejoin_fragments(t)
+
+    # 3. 标点边界
+    t = _RE_PUNCT_WORD.sub(r"\1 \2", t)
+    t = _RE_PAREN_WORD.sub(r"\1 \2", t)
+    t = _RE_WORD_PAREN.sub(r"\1 \2", t)
+
+    # 4. wordninja 拆分粘连词
+    t = _RE_LONG_ALPHA.sub(_segment_long_run, t)
+
+    return t
+
+
+def _rejoin_fragments(text: str) -> str:
+    """贪心合并 OCR 音节碎片。
+
+    对空格分隔的 token，尝试将相邻 2~4 个纯字母 token 拼接，
+    若 wordninja 认为拼接结果是一个完整单词则合并。
+    """
+    import wordninja  # 惰性导入
+
+    tokens = text.split()
+    if len(tokens) <= 1:
+        return text
+
+    result: List[str] = []
+    i = 0
+    while i < len(tokens):
+        best_len = 1
+        for k in range(min(4, len(tokens) - i), 1, -1):
+            group = tokens[i : i + k]
+            if not all(t.isalpha() for t in group):
+                continue
+            joined = "".join(group)
+            parts = wordninja.split(joined)
+            if len(parts) == 1:
+                best_len = k
+                break
+        if best_len > 1:
+            result.append("".join(tokens[i : i + best_len]))
+        else:
+            result.append(tokens[i])
+        i += best_len
+    return " ".join(result)
+
+
+def _segment_long_run(match: re.Match) -> str:  # type: ignore[type-arg]
+    """将一段 4+ 字符的纯字母序列用 wordninja 拆分。"""
+    import wordninja  # 惰性导入
+
+    run = match.group()
+    parts = wordninja.split(run)
+    if len(parts) >= 2:
+        return " ".join(parts)
+    return run

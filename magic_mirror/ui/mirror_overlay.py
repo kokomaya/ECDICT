@@ -154,11 +154,18 @@ class MirrorOverlay(QWidget):
         )
 
         self._render_blocks.append(block)
-        self._preview.add_text(block.translated_text, block.source_text)
+        self._preview.add_text(
+            block.translated_text, block.source_text,
+            sort_key=block.screen_y,
+        )
         if not self.isVisible():
             self.show()
             self.raise_()
         self._start_fade_in()
+
+    def finalize_preview(self) -> None:
+        """流式渲染全部完成后，按原文位置重排预览面板。"""
+        self._preview.sort_by_position()
 
     def show_error(self, msg: str) -> None:
         """在覆盖层上显示错误提示，替换骨架屏。"""
