@@ -111,8 +111,15 @@ class TextOverlay(QWidget):
             f"}}"
         )
 
-        font = QFont(FONT_FAMILY_ZH)
+        first_block = self._render_blocks[0] if self._render_blocks else None
+        font_name = (first_block.font_family if first_block and first_block.font_family
+                     else FONT_FAMILY_ZH)
+        font = QFont(font_name)
         font.setPixelSize(font_size)
+        if first_block and first_block.font_bold:
+            font.setBold(True)
+        if first_block and first_block.font_italic:
+            font.setItalic(True)
         self._editor.setFont(font)
 
         # 合并所有块的文本

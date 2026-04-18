@@ -28,3 +28,5 @@ _Client_Template.py
 
 
 .env
+
+.claude/

@@ -10,15 +10,19 @@
   3. 锐化（提升模糊文字识别率）
   4. 多级放大（低分辨率文字）
   5. 自适应二值化（极低对比度场景）
+  6. 边界填充（提升边缘文字检测率）
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import List
 
 import cv2
 import numpy as np
+
+from magic_mirror.config.settings import OCR_PAD_BORDER
 
 logger = logging.getLogger(__name__)
 
@@ -30,45 +34,62 @@ _UPSCALE_TINY_THRESHOLD = 50
 _LOW_CONTRAST_STD = 50
 
 
-def generate_variants(image: np.ndarray) -> List[np.ndarray]:
+@dataclass
+class VariantInfo:
+    """预处理变体及其坐标偏移信息。"""
+    image: np.ndarray
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+
+
+def generate_variants(image: np.ndarray) -> List[VariantInfo]:
     """将 BGR 图像转换为多种预处理变体列表。
 
-    返回 BGR numpy array 列表，按优先级排列。
-    多变体策略通过 OCR 引擎的空间去重合并结果，提升召回率。
+    返回 VariantInfo 列表，按优先级排列。
+    每个变体包含坐标偏移信息以支持边界填充等变换。
 
     Args:
         image: BGR 格式 numpy 数组。
 
     Returns:
-        预处理变体列表（均为 BGR numpy 数组）。
+        预处理变体列表。
     """
-    variants: List[np.ndarray] = [image]
+    variants: List[VariantInfo] = [VariantInfo(image=image)]
     h = image.shape[0]
 
     # ── 1. CLAHE 对比度增强 ──
     clahe_img = _apply_clahe(image)
     if clahe_img is not None:
-        variants.append(clahe_img)
+        variants.append(VariantInfo(image=clahe_img))
 
     # ── 2. 锐化 ──
     sharp_img = _sharpen(image)
     if sharp_img is not None:
-        variants.append(sharp_img)
+        variants.append(VariantInfo(image=sharp_img))
 
     # ── 3. 多级放大（低分辨率文字） ──
     if h < _UPSCALE_THRESHOLD:
         up2 = _upscale(image, 2)
         if up2 is not None:
-            variants.append(up2)
+            variants.append(VariantInfo(image=up2))
         if h < _UPSCALE_TINY_THRESHOLD:
             up3 = _upscale(image, 3)
             if up3 is not None:
-                variants.append(up3)
+                variants.append(VariantInfo(image=up3))
 
     # ── 4. 自适应二值化（低对比度场景） ──
     bin_img = _adaptive_binarize(image)
     if bin_img is not None:
-        variants.append(bin_img)
+        variants.append(VariantInfo(image=bin_img))
+
+    # ── 5. 边界填充（提升边缘文字检测率） ──
+    pad = OCR_PAD_BORDER
+    if pad > 0:
+        padded = _pad_border(image, pad)
+        if padded is not None:
+            variants.append(VariantInfo(
+                image=padded, offset_x=float(pad), offset_y=float(pad),
+            ))
 
     return variants
 
@@ -130,4 +151,16 @@ def _adaptive_binarize(image: np.ndarray) -> np.ndarray | None:
         return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
     except Exception as e:
         logger.debug("自适应二值化失败: %s", e)
+        return None
+
+
+def _pad_border(image: np.ndarray, pad: int = 12) -> np.ndarray | None:
+    """白色边界填充：提升边缘文字检测率。"""
+    try:
+        return cv2.copyMakeBorder(
+            image, pad, pad, pad, pad,
+            cv2.BORDER_CONSTANT, value=(255, 255, 255),
+        )
+    except Exception as e:
+        logger.debug("边界填充失败: %s", e)
         return None

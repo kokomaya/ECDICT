@@ -325,9 +325,13 @@ class MirrorOverlay(QWidget):
             QColor(bg[0], bg[1], bg[2], a),
         )
 
-        # 字体（像素大小，与 OCR bbox 高度一致）
-        font = QFont(FONT_FAMILY_ZH)
+        # 字体（使用检测到的字体属性，回退到默认中文字体）
+        font = QFont(block.font_family or FONT_FAMILY_ZH)
         font.setPixelSize(block.font_size)
+        if block.font_bold:
+            font.setBold(True)
+        if block.font_italic:
+            font.setItalic(True)
         painter.setFont(font)
 
         # 文字颜色（带不透明度）

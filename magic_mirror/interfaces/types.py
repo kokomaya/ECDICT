@@ -18,6 +18,18 @@ class TextAlignment(Enum):
 
 
 @dataclass
+class FontInfo:
+    """从图像像素分析得到的字体属性"""
+
+    is_serif: bool = False
+    is_bold: bool = False
+    is_italic: bool = False
+    stroke_width: float = 0.0
+    skew_angle: float = 0.0
+    confidence: float = 0.0
+
+
+@dataclass
 class TextBlock:
     """OCR 识别出的单个文本块"""
 
@@ -25,6 +37,7 @@ class TextBlock:
     bbox: List[List[float]]                          # 四角坐标 [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
     font_size_est: float                             # 估算字号 (基于 bbox 高度)
     confidence: float                                # OCR 置信度
+    font_info: FontInfo = field(default_factory=FontInfo)
 
 
 @dataclass
@@ -49,6 +62,9 @@ class RenderBlock:
     text_color: Tuple[int, int, int]                 # RGB
     alignment: TextAlignment = TextAlignment.LEFT     # 文本对齐方式
     source_text: str = ""                             # OCR 原文（用于对照预览）
+    font_family: str = ""
+    font_bold: bool = False
+    font_italic: bool = False
 
 
 @dataclass

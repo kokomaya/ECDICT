@@ -85,8 +85,8 @@ def sample_background_color(
     if cv2.countNonZero(mask) < 4:
         mask[:, :] = 255
 
-    # 中值模糊降噪
-    blurred = cv2.medianBlur(region, 5)
+    # 双边滤波：边缘保持 + 降噪
+    blurred = cv2.bilateralFilter(region, 9, 75, 75)
 
     pixels = blurred[mask > 0]  # shape: (N, 3), BGR
     if len(pixels) == 0:
@@ -194,10 +194,10 @@ def _otsu_masked_color(
     data = text_pixels.astype(np.float32)
     criteria = (
         cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
-        20, 0.5,
+        50, 0.1,
     )
     _, labels, centers = cv2.kmeans(
-        data, min(2, len(data)), None, criteria, 5, cv2.KMEANS_PP_CENTERS,
+        data, min(2, len(data)), None, criteria, 10, cv2.KMEANS_PP_CENTERS,
     )
 
     # 选像素最多的簇作为文字颜色
@@ -219,30 +219,38 @@ def _kmeans_text_color(
     k = min(3, len(data))
     criteria = (
         cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
-        20,    # max iterations (increased from 10)
-        0.5,   # epsilon (tighter convergence)
+        50,
+        0.1,
     )
     _, labels, centers = cv2.kmeans(
-        data, k, None, criteria, 5, cv2.KMEANS_PP_CENTERS,
+        data, k, None, criteria, 10, cv2.KMEANS_PP_CENTERS,
     )
 
     # bg_color 是 (R, G, B, A)，转为 BGR 用于距离计算
     bg_bgr = np.array([bg_color[2], bg_color[1], bg_color[0]], dtype=np.float32)
 
-    # 选择与背景色欧氏距离最大的簇
+    # 选择与背景色 LAB 感知距离最大的簇
     best_center = None
     best_dist = -1.0
     for center in centers:
-        dist = float(np.linalg.norm(center - bg_bgr))
+        dist = _lab_distance(center, bg_bgr)
         if dist > best_dist:
             best_dist = dist
             best_center = center
 
-    # 所有簇都太接近背景 → 无法区分前景
     if best_dist < 30:
         return None
 
     return best_center
+
+
+def _lab_distance(bgr1: np.ndarray, bgr2: np.ndarray) -> float:
+    """CIE LAB 空间的感知色差。"""
+    p1 = np.array([[bgr1.astype(np.uint8)]], dtype=np.uint8)
+    p2 = np.array([[bgr2.astype(np.uint8)]], dtype=np.uint8)
+    lab1 = cv2.cvtColor(p1, cv2.COLOR_BGR2LAB)[0][0].astype(np.float32)
+    lab2 = cv2.cvtColor(p2, cv2.COLOR_BGR2LAB)[0][0].astype(np.float32)
+    return float(np.linalg.norm(lab1 - lab2))
 
 
 def _fallback_text_color(

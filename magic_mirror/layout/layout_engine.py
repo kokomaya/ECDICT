@@ -18,8 +18,13 @@ from magic_mirror.config.settings import (
     FONT_SIZE_SCALE,
     MAX_FONT_SHRINK_RATIO,
 )
-from magic_mirror.interfaces.types import RenderBlock, TextAlignment, TranslatedBlock
-from magic_mirror.layout.color_sampler import sample_background_color, sample_text_color
+from magic_mirror.interfaces.types import FontInfo, RenderBlock, TextAlignment, TranslatedBlock
+from magic_mirror.layout.color_sampler import (
+    sample_background_color,
+    sample_text_color,
+    _lab_distance,
+)
+from magic_mirror.ocr.font_mapper import map_font
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +83,17 @@ class DefaultLayoutEngine:
             # 合并译文（多行用 \n 连接）
             merged_text = "\n".join(b.translated_text for b in para)
 
+            # ── 字体属性：段落内多数投票 ──
+            font_family, font_bold, font_italic = _resolve_paragraph_font(para)
+
             # ── 字号计算（二分查找最优字号） ──
             avg_font_est = sum(b.source.font_size_est for b in para) / len(para)
             n_lines = len(para)
             font_size, render_w = _fit_font_size(
                 merged_text, avg_font_est, merged_w, merged_h, n_lines,
+                font_family=font_family,
+                font_bold=font_bold,
+                font_italic=font_italic,
             )
 
             # 宽度扩展：限制在 _MAX_WIDTH_EXPAND 内，居中对齐减少位置偏移
@@ -109,6 +120,9 @@ class DefaultLayoutEngine:
                 bg_color=bg_color, text_color=text_color,
                 alignment=alignment, merged_source=merged_source,
                 avg_font_est=avg_font_est,
+                font_family=font_family,
+                font_bold=font_bold,
+                font_italic=font_italic,
             ))
 
         # ── 第二轮：统一相近原始字号的段落组的字号 ──
@@ -127,6 +141,9 @@ class DefaultLayoutEngine:
                 text_color=d["text_color"],
                 alignment=d["alignment"],
                 source_text=d["merged_source"],
+                font_family=d["font_family"],
+                font_bold=d["font_bold"],
+                font_italic=d["font_italic"],
             ))
 
         return results
@@ -174,6 +191,26 @@ def _unify_font_sizes(para_data: List[dict]) -> None:
         min_fs = min(para_data[i]["font_size"] for i in group)
         for i in group:
             para_data[i]["font_size"] = min_fs
+
+
+# ------------------------------------------------------------------
+# 字体解析
+# ------------------------------------------------------------------
+
+def _resolve_paragraph_font(
+    para: List[TranslatedBlock],
+) -> Tuple[str, bool, bool]:
+    """段落内多数投票决定字体属性，映射到系统字体。"""
+    n = len(para)
+    serif_votes = sum(1 for b in para if b.source.font_info.is_serif)
+    bold_votes = sum(1 for b in para if b.source.font_info.is_bold)
+    italic_votes = sum(1 for b in para if b.source.font_info.is_italic)
+    consensus = FontInfo(
+        is_serif=(serif_votes > n / 2),
+        is_bold=(bold_votes > n / 2),
+        is_italic=(italic_votes > n / 2),
+    )
+    return map_font(consensus)
 
 
 # ------------------------------------------------------------------
@@ -341,13 +378,16 @@ def _fit_font_size(
     bbox_width: int,
     bbox_height: int,
     n_lines: int,
+    font_family: str = "",
+    font_bold: bool = False,
+    font_italic: bool = False,
 ) -> Tuple[int, int]:
     """二分查找在 bbox 内不溢出的最大字号。
 
     使用 QFontMetrics.boundingRect + TextWordWrap 精确测量
     自动换行后的文本尺寸，支持段落级长文本的重流。
 
-    以 OCR 估算字号为基准，上限不超过 1.2×，确保位置误差 < 2%。
+    以 OCR 估算字号为基准，上限不超过 1.1×，确保位置误差 < 2%。
 
     Args:
         text: 待渲染文本（可能含 \\n）。
@@ -355,18 +395,25 @@ def _fit_font_size(
         bbox_width: bbox 像素宽度。
         bbox_height: bbox 像素高度。
         n_lines: 文本行数（参考，实际以测量为准）。
+        font_family: 字体名称（空则使用默认中文字体）。
+        font_bold: 是否粗体。
+        font_italic: 是否斜体。
 
     Returns:
         (final_font_size, max_line_render_width)
     """
-    # 上界用 1.2× 而非 1.4×，减少溢出导致的位置偏移
-    base_size = max(int(font_size_est * FONT_SIZE_SCALE * 1.2), 8)
+    family = font_family or FONT_FAMILY_ZH
+    base_size = max(int(font_size_est * FONT_SIZE_SCALE * 1.1), 8)
     min_size = max(int(font_size_est * FONT_SIZE_SCALE * MAX_FONT_SHRINK_RATIO), 8)
 
     def _fits(size: int) -> Tuple[bool, int]:
         """检查字号是否在 bbox 内不溢出（支持自动换行）。"""
-        font = QFont(FONT_FAMILY_ZH)
+        font = QFont(family)
         font.setPixelSize(size)
+        if font_bold:
+            font.setBold(True)
+        if font_italic:
+            font.setItalic(True)
         fm = QFontMetrics(font)
         br = fm.boundingRect(
             QRect(0, 0, bbox_width, 100000),
@@ -415,13 +462,12 @@ def _sample_merged_text_color(
     best_color: Tuple[int, int, int] = (0, 0, 0)
     best_dist = -1.0
 
+    bg_bgr = np.array([bg_color[2], bg_color[1], bg_color[0]], dtype=np.float32)
+
     for bbox in bboxes:
         tc = sample_text_color(screenshot, bbox, bg_color)
-        dist = (
-            (tc[0] - bg_color[0]) ** 2
-            + (tc[1] - bg_color[1]) ** 2
-            + (tc[2] - bg_color[2]) ** 2
-        ) ** 0.5
+        tc_bgr = np.array([tc[2], tc[1], tc[0]], dtype=np.float32)
+        dist = _lab_distance(tc_bgr, bg_bgr)
         if dist > best_dist:
             best_dist = dist
             best_color = tc
