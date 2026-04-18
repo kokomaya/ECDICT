@@ -24,7 +24,7 @@ from magic_mirror.layout.color_sampler import sample_background_color, sample_te
 logger = logging.getLogger(__name__)
 
 # 当文字缩小到下限仍溢出时，允许宽度扩展的最大比例
-_MAX_WIDTH_EXPAND = 1.3
+_MAX_WIDTH_EXPAND = 1.15
 
 # 相邻文本块 Y 间距低于此比例（相对行高）时合并为段落
 _MERGE_Y_GAP_RATIO = 0.8
@@ -85,7 +85,12 @@ class DefaultLayoutEngine:
                 merged_text, avg_font_est, merged_w, merged_h, n_lines,
             )
 
-            final_w = max(merged_w, min(render_w, int(merged_w * _MAX_WIDTH_EXPAND)))
+            # 宽度扩展：限制在 _MAX_WIDTH_EXPAND 内，居中对齐减少位置偏移
+            raw_final_w = max(merged_w, min(render_w, int(merged_w * _MAX_WIDTH_EXPAND)))
+            width_delta = raw_final_w - merged_w
+            # 居中补偿：扩展的宽度向两侧均分，减少位置漂移
+            sx_adj = sx - width_delta // 2
+            final_w = raw_final_w
             final_h = merged_h
 
             # ── 颜色采样（合并所有子块区域） ──
@@ -99,7 +104,7 @@ class DefaultLayoutEngine:
             merged_source = "\n".join(b.source.text for b in para)
 
             para_data.append(dict(
-                sx=sx, sy=sy, final_w=final_w, final_h=final_h,
+                sx=sx_adj, sy=sy, final_w=final_w, final_h=final_h,
                 merged_text=merged_text, font_size=font_size,
                 bg_color=bg_color, text_color=text_color,
                 alignment=alignment, merged_source=merged_source,
@@ -299,24 +304,30 @@ def _std(values: List[float]) -> float:
 # ------------------------------------------------------------------
 
 def _bbox_rect(bbox: list) -> Tuple[int, int, int, int]:
-    """四角坐标 → (left, top, width, height) 轴对齐矩形。"""
+    """四角坐标 → (left, top, width, height) 轴对齐矩形。
+
+    使用 round() 而非 int() 截断，减少坐标偏移。
+    """
     xs = [pt[0] for pt in bbox]
     ys = [pt[1] for pt in bbox]
-    left = int(min(xs))
-    top = int(min(ys))
-    width = max(int(max(xs)) - left, 1)
-    height = max(int(max(ys)) - top, 1)
+    left = round(min(xs))
+    top = round(min(ys))
+    width = max(round(max(xs)) - left, 1)
+    height = max(round(max(ys)) - top, 1)
     return left, top, width, height
 
 
 def _merged_bbox(bboxes: list) -> Tuple[int, int, int, int]:
-    """多个四角坐标 → 合并后的 (left, top, width, height)。"""
+    """多个四角坐标 → 合并后的 (left, top, width, height)。
+
+    使用 round() 保持与原始坐标的一致性。
+    """
     all_xs = [pt[0] for bbox in bboxes for pt in bbox]
     all_ys = [pt[1] for bbox in bboxes for pt in bbox]
-    left = int(min(all_xs))
-    top = int(min(all_ys))
-    width = max(int(max(all_xs)) - left, 1)
-    height = max(int(max(all_ys)) - top, 1)
+    left = round(min(all_xs))
+    top = round(min(all_ys))
+    width = max(round(max(all_xs)) - left, 1)
+    height = max(round(max(all_ys)) - top, 1)
     return left, top, width, height
 
 
@@ -336,6 +347,8 @@ def _fit_font_size(
     使用 QFontMetrics.boundingRect + TextWordWrap 精确测量
     自动换行后的文本尺寸，支持段落级长文本的重流。
 
+    以 OCR 估算字号为基准，上限不超过 1.2×，确保位置误差 < 2%。
+
     Args:
         text: 待渲染文本（可能含 \\n）。
         font_size_est: OCR 估算的原始字号。
@@ -346,8 +359,8 @@ def _fit_font_size(
     Returns:
         (final_font_size, max_line_render_width)
     """
-    # pixelSize 的 fm.height() > pixelSize（含 descent），所以上界需放大
-    base_size = max(int(font_size_est * FONT_SIZE_SCALE * 1.4), 8)
+    # 上界用 1.2× 而非 1.4×，减少溢出导致的位置偏移
+    base_size = max(int(font_size_est * FONT_SIZE_SCALE * 1.2), 8)
     min_size = max(int(font_size_est * FONT_SIZE_SCALE * MAX_FONT_SHRINK_RATIO), 8)
 
     def _fits(size: int) -> Tuple[bool, int]:

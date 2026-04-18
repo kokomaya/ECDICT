@@ -2,6 +2,11 @@
 
 职责单一：接收 BGR 图像，返回带坐标的文本块列表。
 不涉及截图、翻译、排版或渲染逻辑。
+
+改进策略：
+  - 多变体预处理（CLAHE、锐化、放大、二值化）
+  - 多检测阈值：主阈值 + 低阈值补漏
+  - 空间去重 + 文本相似度去重
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import numpy as np
 from magic_mirror.config.settings import (
     OCR_CONFIDENCE_THRESHOLD,
     OCR_DET_BOX_THRESH,
+    OCR_DET_BOX_THRESH_LOW,
     OCR_USE_GPU,
 )
 from magic_mirror.interfaces.types import TextBlock
@@ -27,6 +33,11 @@ class RapidOcrEngine:
 
     惰性加载模型：首次调用 recognize() 时才初始化 OCR 引擎，
     避免启动时占用内存和加载时间。
+
+    识别策略：
+      1. 对图像生成多种预处理变体
+      2. 每种变体分别用主阈值和低阈值检测
+      3. 空间去重合并候选结果
     """
 
     def __init__(self) -> None:
@@ -36,7 +47,8 @@ class RapidOcrEngine:
     def recognize(self, image: np.ndarray) -> List[TextBlock]:
         """从图像中提取带位置信息的文本块。
 
-        对图像生成多种预处理变体，逐一识别并合并结果（按文本去重）。
+        对图像生成多种预处理变体，逐一识别并合并结果。
+        每种变体用主阈值和低阈值各跑一遍以提高召回率。
 
         Args:
             image: BGR 格式 numpy 数组。
@@ -50,39 +62,43 @@ class RapidOcrEngine:
         variants = generate_variants(image)
         candidates: List[TextBlock] = []
 
-        # 第一个变体是原图，用于计算缩放比例
         orig_h, orig_w = image.shape[:2]
 
-        for variant in variants:
-            raw = self._run_ocr(variant)
-            if not raw:
-                continue
+        # 多阈值检测：主阈值 + 低阈值补漏
+        thresholds = [OCR_DET_BOX_THRESH]
+        if OCR_DET_BOX_THRESH_LOW < OCR_DET_BOX_THRESH:
+            thresholds.append(OCR_DET_BOX_THRESH_LOW)
 
-            # 如果变体尺寸与原图不同，需要缩放 bbox 坐标回原图尺寸
+        for variant in variants:
             vh, vw = variant.shape[:2]
             scale_x = orig_w / vw if vw != orig_w else 1.0
             scale_y = orig_h / vh if vh != orig_h else 1.0
 
-            for bbox_points, text, confidence in raw:
-                text = text.strip()
-                if not text:
-                    continue
-                if confidence < OCR_CONFIDENCE_THRESHOLD:
+            for thresh in thresholds:
+                raw = self._run_ocr(variant, det_box_thresh=thresh)
+                if not raw:
                     continue
 
-                # 缩放 bbox 回原图坐标
-                if scale_x != 1.0 or scale_y != 1.0:
-                    bbox_points = [
-                        [pt[0] * scale_x, pt[1] * scale_y]
-                        for pt in bbox_points
-                    ]
+                for bbox_points, text, confidence in raw:
+                    text = text.strip()
+                    if not text:
+                        continue
+                    if confidence < OCR_CONFIDENCE_THRESHOLD:
+                        continue
 
-                candidates.append(TextBlock(
-                    text=text,
-                    bbox=bbox_points,
-                    font_size_est=self._estimate_font_size(bbox_points),
-                    confidence=confidence,
-                ))
+                    # 缩放 bbox 回原图坐标
+                    if scale_x != 1.0 or scale_y != 1.0:
+                        bbox_points = [
+                            [pt[0] * scale_x, pt[1] * scale_y]
+                            for pt in bbox_points
+                        ]
+
+                    candidates.append(TextBlock(
+                        text=text,
+                        bbox=bbox_points,
+                        font_size_est=self._estimate_font_size(bbox_points),
+                        confidence=confidence,
+                    ))
 
         # 空间去重：重叠区域 IoU > 阈值时只保留置信度最高的
         blocks = self._spatial_dedup(candidates)
@@ -121,14 +137,25 @@ class RapidOcrEngine:
 
     # ── OCR 调用 ──
 
-    def _run_ocr(self, image: np.ndarray) -> list[tuple] | None:
+    def _run_ocr(
+        self,
+        image: np.ndarray,
+        det_box_thresh: float | None = None,
+    ) -> list[tuple] | None:
         """调用 RapidOCR 执行识别。
+
+        Args:
+            image: BGR 格式 numpy 数组。
+            det_box_thresh: 检测框阈值，None 使用引擎默认值。
 
         Returns:
             [(bbox_points, text, confidence), ...] 或 None。
         """
         try:
-            result, _ = self._ocr(image)
+            kwargs = {}
+            if det_box_thresh is not None:
+                kwargs["det_box_thresh"] = det_box_thresh
+            result, _ = self._ocr(image, **kwargs)
             return result if result else None
         except Exception as e:
             logger.debug("OCR 调用异常: %s", e)
@@ -143,7 +170,8 @@ class RapidOcrEngine:
     ) -> List[TextBlock]:
         """空间去重：对重叠的文本块只保留置信度最高的。
 
-        两个 bbox 的 IoU（交集/并集）超过阈值时认为重复。
+        两个 bbox 的 IoU（交集/并集）或交集占比超过阈值时认为重复。
+        增加包含检测：小框被大框包含时也视为重复。
         """
         # 按置信度降序排列，优先保留高置信度
         sorted_cands = sorted(candidates, key=lambda b: b.confidence, reverse=True)
@@ -157,6 +185,10 @@ class RapidOcrEngine:
                 if _iou(r1, r2) > iou_threshold:
                     is_dup = True
                     break
+                # 包含检测：候选框被已保留框包含
+                if _contains(r2, r1):
+                    is_dup = True
+                    break
             if not is_dup:
                 kept.append(cand)
 
@@ -167,9 +199,11 @@ class RapidOcrEngine:
         """根据 bbox 高度估算字号（像素）。
 
         bbox 四角坐标: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-        字号 ≈ 左上到左下的垂直距离。
+        取左边高度和右边高度的平均值，对旋转文本更稳健。
         """
-        return abs(bbox[3][1] - bbox[0][1])
+        left_h = abs(bbox[3][1] - bbox[0][1])
+        right_h = abs(bbox[2][1] - bbox[1][1])
+        return (left_h + right_h) / 2.0
 
 
 # ------------------------------------------------------------------
@@ -207,3 +241,13 @@ def _iou(r1: tuple, r2: tuple) -> float:
     area2 = (r2[2] - r2[0]) * (r2[3] - r2[1])
     union = area1 + area2 - inter
     return inter / union if union > 0 else 0.0
+
+
+def _contains(outer: tuple, inner: tuple, margin: float = 2.0) -> bool:
+    """判断 outer 矩形是否包含 inner 矩形（允许 margin 像素容差）。"""
+    return (
+        inner[0] >= outer[0] - margin
+        and inner[1] >= outer[1] - margin
+        and inner[2] <= outer[2] + margin
+        and inner[3] <= outer[3] + margin
+    )
