@@ -7,6 +7,7 @@ import os
 import sys
 import ctypes
 import ctypes.wintypes
+import threading
 
 from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
 from PyQt6.QtWidgets import QApplication
@@ -133,6 +134,7 @@ class QuickDictApp(QObject):
 
         # 启动键盘监听
         self._hotkey.start()
+        self._start_warmup_tasks()
         logger.info("已启动 — 连按两次 Ctrl 激活取词，Esc 退出取词模式")
 
     # ── 取词模式控制 ──────────────────────────────────────
@@ -143,12 +145,18 @@ class QuickDictApp(QObject):
         self._settle_pos = self._get_cursor_pos()
         self._word_zone_radius = self._WORD_ZONE_BASE_PX
         self._poll_timer.start()
+        if self._trigger_mode == "hover":
+            self._settle_timer.start()
         self._tray.set_capture_enabled(True)
         if self._show_status:
             self._status_indicator.set_active(True)
             self._status_indicator.show()
         else:
             self._tray.show_message("QECDict", "取词模式已开启", 500)
+
+    def _start_warmup_tasks(self):
+        """启动后台预热任务，降低首次取词/查词延迟。"""
+        threading.Thread(target=self._capture.warmup, daemon=True).start()
 
     def _on_deactivate(self):
         self._poll_timer.stop()
