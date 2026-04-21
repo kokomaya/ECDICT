@@ -107,6 +107,9 @@ def _build_tray(app, quickdict, mirror, has_mirror):
 
     menu = QMenu()
 
+    # 读取 QuickDict 已加载的持久化设置
+    _qs = quickdict._settings
+
     # ── QuickDict 区 ──
     header_qd = QAction("── QuickDict 取词 ──", menu)
     header_qd.setEnabled(False)
@@ -118,10 +121,59 @@ def _build_tray(app, quickdict, mirror, has_mirror):
     act_toggle.triggered.connect(toggle_capture)
 
     def on_capture_state_changed(enabled):
-        act_toggle.setText("关闭取词" if enabled else "开启取词")
+        act_toggle.setText("关闭取词 ✓" if enabled else "开启取词")
     quickdict._tray.sig_toggle_capture.connect(
         lambda: QTimer.singleShot(50, lambda: on_capture_state_changed(quickdict._tray._capture_enabled))
     )
+
+    # 取词模式子菜单（从持久化设置恢复选中状态）
+    from PyQt6.QtGui import QActionGroup
+    saved_mode = _qs.get("capture_mode", "auto")
+    mode_menu = menu.addMenu("取词模式")
+    mode_group = QActionGroup(menu)
+    mode_group.setExclusive(True)
+    for key, label in [("auto", "自动（UIA→OCR）"), ("uia", "仅 UIA"), ("ocr", "仅 OCR")]:
+        act = mode_menu.addAction(label)
+        act.setCheckable(True)
+        act.setActionGroup(mode_group)
+        act.triggered.connect(lambda checked, k=key: quickdict._tray.sig_capture_mode_changed.emit(k))
+        if key == saved_mode:
+            act.setChecked(True)
+
+    # 触发方式子菜单（从持久化设置恢复选中状态）
+    saved_trigger = _qs.get("trigger_mode", "ctrl")
+    trigger_menu = menu.addMenu("触发方式")
+    trigger_group = QActionGroup(menu)
+    trigger_group.setExclusive(True)
+    for key, label in [("hover", "悬停取词"), ("ctrl", "Ctrl 键取词")]:
+        act = trigger_menu.addAction(label)
+        act.setCheckable(True)
+        act.setActionGroup(trigger_group)
+        act.triggered.connect(lambda checked, k=key: quickdict._tray.sig_trigger_mode_changed.emit(k))
+        if key == saved_trigger:
+            act.setChecked(True)
+
+    menu.addSeparator()
+
+    # 显示截图区域（从持久化设置恢复，默认 True）
+    act_debug_region = menu.addAction("显示截图区域")
+    act_debug_region.setCheckable(True)
+    act_debug_region.setChecked(_qs.get("show_region", True))
+    act_debug_region.triggered.connect(
+        lambda checked: quickdict._tray.sig_toggle_debug_region.emit(checked)
+    )
+
+    # 状态指示器（从持久化设置恢复，默认 True）
+    act_status_ind = menu.addAction("状态指示器")
+    act_status_ind.setCheckable(True)
+    act_status_ind.setChecked(_qs.get("show_status", True))
+    act_status_ind.triggered.connect(
+        lambda checked: quickdict._tray.sig_toggle_status_indicator.emit(checked)
+    )
+
+    # 截图区域设置
+    act_region_settings = menu.addAction("截图区域设置…")
+    act_region_settings.triggered.connect(lambda: quickdict._tray.sig_region_settings.emit())
 
     menu.addSeparator()
 

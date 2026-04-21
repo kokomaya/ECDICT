@@ -145,13 +145,6 @@ def render_markdown(text: str) -> str:
     """将 Markdown 文本转换为带内联样式的 HTML 片段。"""
     _MD.reset()
     html_body = _MD.convert(_ensure_blank_lines(text))
-    # 为代码块包裹 copy 按钮容器
-    html_body = _re.sub(
-        r"(<pre>)",
-        r'<div class="code-wrapper"><button class="copy-btn">Copy</button>\1',
-        html_body,
-    )
-    html_body = html_body.replace("</pre>", "</pre></div>")
     return html_body
 
 
@@ -168,7 +161,6 @@ _MSG_TEMPLATE = """\
     </div>
     <div class="msg-content">{content}</div>
   </div>
-  {copy_btn}
 </div>
 """
 
@@ -179,7 +171,7 @@ def render_message(role: str, text: str) -> str:
         content = html_mod.escape(text).replace("\n", "<br>")
         return _MSG_TEMPLATE.format(
             role_class="human", icon="U", label="You",
-            content=content, copy_btn="",
+            content=content,
         )
 
     if role == "assistant":
@@ -187,14 +179,13 @@ def render_message(role: str, text: str) -> str:
         return _MSG_TEMPLATE.format(
             role_class="ai", icon="M", label="Magic Mirror",
             content=content,
-            copy_btn='<button class="msg-copy-btn">Copy</button>',
         )
 
     # error
     content = f'<span style="color:{TEXT_ERR}">{html_mod.escape(text)}</span>'
     return _MSG_TEMPLATE.format(
         role_class="err", icon="!", label="Error",
-        content=content, copy_btn="",
+        content=content,
     )
 
 
