@@ -3,6 +3,7 @@
 # ── 热键 ──
 HOTKEY_TRIGGER = "ctrl+alt+t"
 HOTKEY_OCR_COPY = "ctrl+alt+c"         # OCR 提取原文并复制到剪贴板
+HOTKEY_CHAT = "ctrl+alt+d"             # 选中文本后直接 AI 聊天
 
 # ── OCR ──
 OCR_CONFIDENCE_THRESHOLD = 0.5
