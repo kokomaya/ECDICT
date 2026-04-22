@@ -311,6 +311,7 @@ class ChatDialog(QDialog):
 
     @pyqtSlot(str)
     def _on_chunk(self, piece: str) -> None:
+        # logger.debug("[LLM chunk] %r", piece)
         self._stream_buf += piece
         self._messages[-1]["text"] = self._stream_buf
         # 防抖：不是每个 chunk 都渲染，80ms 合并一次

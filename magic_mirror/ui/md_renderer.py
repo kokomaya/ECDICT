@@ -135,15 +135,50 @@ _BLOCK_START = _re.compile(
     r"([ \t]*[-*+] |\d+\. |```|#{1,6} )",  # 列表/代码块/标题起始
 )
 
+# 匹配围栏代码块（含未闭合的）
+_FENCED_BLOCK = _re.compile(r"(```[^\n]*\n)(.*?)(```|$)", _re.DOTALL)
+
 
 def _ensure_blank_lines(text: str) -> str:
-    """在 Markdown 块级元素前补空行，确保解析器识别。"""
-    return _BLOCK_START.sub(r"\n\1", text)
+    """在 Markdown 块级元素前补空行，确保解析器识别。
+
+    跳过围栏代码块内部，避免破坏代码内容。
+    """
+    parts: list[str] = []
+    last_end = 0
+    for m in _FENCED_BLOCK.finditer(text):
+        # 处理代码块之前的普通文本
+        before = text[last_end:m.start()]
+        parts.append(_BLOCK_START.sub(r"\n\1", before))
+        # 代码块原样保留
+        parts.append(m.group(0))
+        last_end = m.end()
+    # 处理最后一段普通文本
+    tail = text[last_end:]
+    parts.append(_BLOCK_START.sub(r"\n\1", tail))
+    return "".join(parts)
+
+
+def _close_unclosed_fences(text: str) -> str:
+    """若存在未闭合的围栏代码块，自动在末尾补上 ```。
+
+    流式输出时关闭 ``` 可能尚未到达，补齐后 Markdown
+    解析器才能正确识别代码块，避免 # 被当作标题。
+    """
+    fence_count = 0
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            fence_count += 1
+    if fence_count % 2 == 1:
+        text = text.rstrip() + "\n```"
+    return text
 
 
 def render_markdown(text: str) -> str:
     """将 Markdown 文本转换为带内联样式的 HTML 片段。"""
     _MD.reset()
+    text = _close_unclosed_fences(text)
     html_body = _MD.convert(_ensure_blank_lines(text))
     return html_body
 
