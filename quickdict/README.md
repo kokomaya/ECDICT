@@ -9,6 +9,32 @@
 - 系统托盘常驻，右键菜单控制
 - 支持词形还原（lemma）、模糊匹配
 
+## 架构
+
+```mermaid
+flowchart TD
+    User["User (hover)"] -->|"double Ctrl"| HK["HotkeyListener<br/>hotkey.py"]
+
+    subgraph Controller["Controller — main.py"]
+        HK -->|"activated signal"| App["QuickDictApp"]
+        App -->|"poll cursor position"| WC["WordCapture<br/>word_capture.py"]
+    end
+
+    subgraph Capture["Capture strategy — word_capture.py"]
+        WC -->|"UIA first"| UIA["UI Automation<br/>(Windows API)"]
+        WC -->|"OCR fallback"| OCR["OcrCapture<br/>_ocr_capture.py"]
+        UIA & OCR --> W(["English word"])
+    end
+
+    subgraph Lookup["Lookup layer"]
+        W -->|"_sig_lookup"| LW["LookupWorker<br/>_lookup_worker.py"]
+        LW -->|"SQL query"| DB[("ecdict.db")]
+    end
+
+    LW -->|"dict entry"| PW["PopupWidget<br/>popup_widget.py"]
+    App -.- TM["TrayManager<br/>app.py"]
+```
+
 ## 开发环境
 
 ### 首次安装

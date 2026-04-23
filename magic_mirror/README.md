@@ -2,6 +2,25 @@
 
 Real-time screen region translation overlay. Captures a screen area via OCR, translates via LLM API, and renders the result as a transparent overlay.
 
+## 架构
+
+```mermaid
+flowchart TD
+    User["User"] -->|"Ctrl+Alt+T"| RS["RegionSelector<br/>capture/region_selector.py"]
+
+    subgraph Pipeline["TranslatePipeline — pipeline.py"]
+        RS -->|"bbox"| CAP["PilScreenCapture<br/>Screenshot"]
+        CAP -->|"Image"| OCR["RapidOcrEngine<br/>OCR"]
+        OCR -->|"TextBlock list"| TR["Translator<br/>translation/"]
+        TR -->|"TranslatedBlock list"| LY["LayoutEngine<br/>Layout"]
+    end
+
+    TR <-->|"OpenAI-compatible API"| LLM[("LLM Service<br/>OpenAI / Ollama / ...")]
+
+    LY -->|"RenderBlock list"| OV["MirrorOverlay / TextOverlay<br/>ui/ — transparent overlay"]
+    OV -->|"right-click menu"| CD["ChatDialog<br/>ui/chat_dialog.py"]
+```
+
 ## Quick Start
 
 ### From Source
