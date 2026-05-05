@@ -34,6 +34,7 @@ class TrayManager(QObject):
     sig_toggle_debug_region = pyqtSignal(bool)   # 显示/隐藏截图区域框
     sig_toggle_status_indicator = pyqtSignal(bool)  # 显示/隐藏状态指示器
     sig_region_settings = pyqtSignal()               # 打开截图区域设置对话框
+    sig_open_lookup = pyqtSignal()                   # 打开中文查词对话框
     sig_open_settings = pyqtSignal()
     sig_open_history = pyqtSignal()
     sig_quit = pyqtSignal()
@@ -97,6 +98,12 @@ class TrayManager(QObject):
         self._action_region_settings.triggered.connect(
             lambda: self.sig_region_settings.emit()
         )
+
+        self._menu.addSeparator()
+
+        # ── 中文查词 ────────────────────────────────────────
+        self._action_lookup = self._menu.addAction("中文查词 (Ctrl+F)")
+        self._action_lookup.triggered.connect(self.sig_open_lookup.emit)
 
         self._action_history = self._menu.addAction("查词历史（暂不支持）")
         self._action_history.setEnabled(False)

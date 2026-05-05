@@ -21,6 +21,7 @@ if _STARDICT_DIR not in sys.path:
 
 from stardict import StarDict, stripword
 from quickdict._formatter import format_result
+from quickdict._chinese_lookup import ChineseLookup
 
 
 class DictEngine:
@@ -33,6 +34,7 @@ class DictEngine:
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA query_only=ON;")
         self._has_lemma = self._check_lemma_table()
+        self._chinese_lookup = ChineseLookup(db_path)
 
     def _check_lemma_table(self) -> bool:
         """检查 lemma 表是否存在。"""
@@ -122,6 +124,12 @@ class DictEngine:
         matches = self._sd.match(word.strip(), limit=limit)
         return [w for _, w in matches]
 
+    # ── 中文反查 ──────────────────────────────────────────
+
+    def reverse_lookup(self, keyword: str, limit: int = 20) -> list[dict]:
+        """根据中文关键词反查匹配的英文词条列表。"""
+        return self._chinese_lookup.search(keyword, limit=limit)
+
     # ── 生命周期 ──────────────────────────────────────────
 
     def close(self):
@@ -129,6 +137,9 @@ class DictEngine:
         if self._conn:
             self._conn.close()
             self._conn = None
+        if self._chinese_lookup:
+            self._chinese_lookup.close()
+            self._chinese_lookup = None
         if self._sd:
             self._sd.close()
             self._sd = None

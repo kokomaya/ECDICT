@@ -22,6 +22,9 @@ from quickdict._lookup_worker import LookupWorker
 from quickdict._capture_overlay import CaptureRegionOverlay
 from quickdict._ocr_capture import set_region_size
 from quickdict._region_settings import RegionSettingsDialog
+from quickdict._chinese_lookup import ChineseLookup
+from quickdict.dict_engine import DictEngine
+from quickdict.lookup_dialog import LookupDialog
 
 
 # ── pynput 线程 → Qt 主线程桥接 ───────────────────────────
@@ -31,6 +34,7 @@ class _HotkeyBridge(QObject):
     activated = pyqtSignal()
     deactivated = pyqtSignal()
     ctrl_captured = pyqtSignal()
+    open_lookup = pyqtSignal()
 
 
 # ── 主控制器 ──────────────────────────────────────────────
@@ -110,10 +114,12 @@ class QuickDictApp(QObject):
         self._bridge.activated.connect(self._on_activate)
         self._bridge.deactivated.connect(self._on_deactivate)
         self._bridge.ctrl_captured.connect(self._on_ctrl_capture)
+        self._bridge.open_lookup.connect(self._on_open_lookup)
         self._hotkey = HotkeyListener(
             on_activate=self._bridge.activated.emit,
             on_deactivate=self._bridge.deactivated.emit,
             on_ctrl_capture=self._bridge.ctrl_captured.emit,
+            on_open_lookup=self._bridge.open_lookup.emit,
         )
 
         # 系统托盘
@@ -124,6 +130,7 @@ class QuickDictApp(QObject):
         self._tray.sig_toggle_debug_region.connect(self._on_toggle_debug_region)
         self._tray.sig_toggle_status_indicator.connect(self._on_toggle_status_indicator)
         self._tray.sig_region_settings.connect(self._on_open_region_settings)
+        self._tray.sig_open_lookup.connect(self._on_open_lookup)
         self._tray.sig_quit.connect(self._quit)
         self._tray.set_capture_mode_checked(saved_mode_key)
         self._tray.set_trigger_mode_checked(self._trigger_mode)
@@ -131,6 +138,7 @@ class QuickDictApp(QObject):
         self._tray.set_status_indicator_checked(self._show_status)
         self._tray.show()
         self._region_dialog: RegionSettingsDialog | None = None
+        self._lookup_dialog: LookupDialog | None = None
 
         # 启动键盘监听
         self._hotkey.start()
@@ -256,6 +264,38 @@ class QuickDictApp(QObject):
         self._settings["region_half_h"] = half_h
         self._settings["region_opacity"] = opacity
         save_settings(self._settings)
+
+    # ── 中文查词对话框 ────────────────────────────────────
+
+    def _on_open_lookup(self):
+        """唤出中文查词对话框。"""
+        if self._lookup_dialog is None:
+            self._lookup_dialog = LookupDialog()
+            self._lookup_dialog.sig_search_requested.connect(self._on_lookup_search)
+            self._lookup_dialog.sig_detail_requested.connect(self._on_lookup_detail)
+            # 主线程专用的查询实例（避免跨线程使用 worker 的 sqlite3 连接）
+            self._cn_lookup = ChineseLookup(ensure_db())
+            self._lookup_engine = DictEngine(ensure_db())
+        self._lookup_dialog.show_and_focus()
+
+    def _on_lookup_search(self, keyword: str):
+        """中文查词对话框搜索请求。"""
+        results = self._cn_lookup.search(keyword)
+        if self._lookup_dialog:
+            self._lookup_dialog.show_results(results)
+
+    def _on_lookup_detail(self, word: str):
+        """中文查词对话框点击条目 → 查完整释义并弹窗。"""
+        data = self._lookup_engine.lookup(word)
+        if data:
+            # 在对话框附近弹出详情
+            if self._lookup_dialog and self._lookup_dialog.isVisible():
+                geo = self._lookup_dialog.geometry()
+                x = geo.x() + geo.width() + 10
+                y = geo.y() + 50
+            else:
+                x, y = self._get_cursor_pos()
+            self._popup.show_word(data, x, y)
 
     def _on_ctrl_capture(self):
         """Ctrl 键取词：在当前鼠标位置立即取词。"""

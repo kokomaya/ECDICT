@@ -18,15 +18,18 @@ class HotkeyListener:
     - 取词模式下按 Esc → 退出取词模式
     - Ctrl 组合键（如 Ctrl+C）不触发激活
     - 取词模式下单次 Ctrl 释放 → 触发 on_ctrl_capture（供 Ctrl 取词模式使用）
+    - Ctrl+F → 唤出中文查词对话框
     """
 
     DOUBLE_PRESS_INTERVAL = 0.5  # 秒
 
     def __init__(self, on_activate: Callable, on_deactivate: Callable,
-                 on_ctrl_capture: Callable | None = None):
+                 on_ctrl_capture: Callable | None = None,
+                 on_open_lookup: Callable | None = None):
         self._on_activate = on_activate
         self._on_deactivate = on_deactivate
         self._on_ctrl_capture = on_ctrl_capture
+        self._on_open_lookup = on_open_lookup
         self._active = False
         self._ctrl_release_times: list[float] = []
         self._other_key_pressed = False
@@ -66,6 +69,13 @@ class HotkeyListener:
 
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_is_down = True
+            return
+
+        # Ctrl+F → 唤出中文查词对话框
+        if self._ctrl_is_down and hasattr(key, 'char') and key.char == '\x06':
+            self._other_key_pressed = True
+            if self._on_open_lookup:
+                self._on_open_lookup()
             return
 
         # 仅当 Ctrl 正被按住时，才把非 Ctrl 记为组合键
