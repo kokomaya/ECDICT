@@ -84,18 +84,18 @@ class QuickTranslator:
             logger.warning("输入文本超出 %d 字符，已截断", MAX_INPUT_CHARS)
 
         direction = detect_direction(text)
-        system_prompt = (
+        instruction = (
             QUICK_TRANSLATE_SYSTEM_ZH2EN
             if direction == "zh2en"
             else QUICK_TRANSLATE_SYSTEM_EN2ZH
         )
         logger.debug("翻译方向: %s，文本长度: %d", direction, len(text))
 
+        user_content = f"{instruction}\n\n{text}"
         stream = self._client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text},
+                {"role": "user", "content": user_content},
             ],
             stream=True,
         )

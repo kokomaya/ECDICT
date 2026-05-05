@@ -48,6 +48,8 @@ a = Analysis(
         "pygments.lexers",
         "pygments.formatters",
         "pygments.formatters.html",
+        # 快速互译（懒加载，需显式声明）
+        "magic_mirror.translation.quick_translator",
     ],
     hookspath=[],
     hooksconfig={},

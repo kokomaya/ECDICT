@@ -3,7 +3,7 @@ chcp 65001 >nul 2>&1
 
 cd /d "%~dp0"
 
-set VER=0.1.0
+set VER=0.1.1
 
 echo ============================================
 echo   LinguaLens Build  v%VER%
