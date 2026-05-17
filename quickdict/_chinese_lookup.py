@@ -11,8 +11,8 @@ from functools import lru_cache
 class ChineseLookup:
     """中文 → 英文反查引擎。"""
 
-    def __init__(self, db_path: str):
-        self._conn = sqlite3.connect(db_path)
+    def __init__(self, db_path: str, *, check_same_thread: bool = True):
+        self._conn = sqlite3.connect(db_path, check_same_thread=check_same_thread)
         self._conn.execute("PRAGMA query_only=ON;")
         self._conn.row_factory = sqlite3.Row
 

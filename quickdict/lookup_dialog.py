@@ -221,6 +221,13 @@ class LookupDialog(QDialog):
         self._input.setFocus()
         self._input.selectAll()
 
+    def set_busy(self, busy: bool):
+        """设置搜索忙碌状态，更新按钮文本。"""
+        self._btn_search.setEnabled(not busy)
+        self._btn_search.setText("查询中…" if busy else "查询")
+        if busy:
+            self._lbl_count.setText("正在搜索…")
+
     def show_results(self, results: list[dict]):
         """展示搜索结果列表。"""
         self._clear_results()

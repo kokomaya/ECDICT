@@ -9,7 +9,7 @@ import ctypes
 import ctypes.wintypes
 import threading
 
-from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, QThread, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QApplication
 
 from quickdict.config import ensure_db, load_settings, save_settings
@@ -139,6 +139,7 @@ class QuickDictApp(QObject):
         self._tray.show()
         self._region_dialog: RegionSettingsDialog | None = None
         self._lookup_dialog: LookupDialog | None = None
+        self._search_gen = 0  # 查词代次，丢弃过期结果
 
         # 启动键盘监听
         self._hotkey.start()
@@ -274,14 +275,41 @@ class QuickDictApp(QObject):
             self._lookup_dialog.sig_search_requested.connect(self._on_lookup_search)
             self._lookup_dialog.sig_detail_requested.connect(self._on_lookup_detail)
             # 主线程专用的查询实例（避免跨线程使用 worker 的 sqlite3 连接）
-            self._cn_lookup = ChineseLookup(ensure_db())
+            self._cn_lookup = ChineseLookup(ensure_db(), check_same_thread=False)
             self._lookup_engine = DictEngine(ensure_db())
         self._lookup_dialog.show_and_focus()
 
     def _on_lookup_search(self, keyword: str):
-        """中文查词对话框搜索请求。"""
-        results = self._cn_lookup.search(keyword)
+        """中文查词对话框搜索请求 — 异步执行，支持打断。"""
+        self._search_gen += 1
+        gen = self._search_gen
         if self._lookup_dialog:
+            self._lookup_dialog.set_busy(True)
+
+        class _Worker(QRunnable):
+            class Sig(QObject):
+                done = pyqtSignal(int, list)
+            def __init__(self, cn_lookup, kw, g):
+                super().__init__()
+                self.signals = self.Sig()
+                self._cn_lookup = cn_lookup
+                self._kw = kw
+                self._gen = g
+            def run(self):
+                results = self._cn_lookup.search(self._kw)
+                self.signals.done.emit(self._gen, results)
+
+        worker = _Worker(self._cn_lookup, keyword, gen)
+        worker.signals.done.connect(self._on_lookup_result)
+        QThreadPool.globalInstance().start(worker)
+
+    @pyqtSlot(int, list)
+    def _on_lookup_result(self, gen: int, results: list):
+        """收到查词结果 — 仅接受最新代次。"""
+        if gen != self._search_gen:
+            return  # 过期结果，丢弃
+        if self._lookup_dialog:
+            self._lookup_dialog.set_busy(False)
             self._lookup_dialog.show_results(results)
 
     def _on_lookup_detail(self, word: str):

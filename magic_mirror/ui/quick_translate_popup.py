@@ -439,6 +439,11 @@ class QuickTranslatePopup(QWidget):
         self._copy_btn.clicked.connect(self._on_copy_result)
         btn_row.addWidget(self._copy_btn)
 
+        self._retranslate_btn = QPushButton("重新翻译")
+        self._retranslate_btn.setObjectName("actionBtn")
+        self._retranslate_btn.clicked.connect(self._on_retranslate)
+        btn_row.addWidget(self._retranslate_btn)
+
         btn_row.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding))
 
         self._chat_btn = QPushButton("在聊天中继续 ▶")
@@ -559,6 +564,12 @@ class QuickTranslatePopup(QWidget):
         QApplication.clipboard().setText(self._result_text)
         self._copy_btn.setText("已复制 ✓")
         QTimer.singleShot(1500, lambda: self._copy_btn.setText("复制译文"))
+
+    @pyqtSlot()
+    def _on_retranslate(self) -> None:
+        """切换回输入模式，保留上次输入文本便于编辑。"""
+        self._input_box.setPlainText(self._source_text)
+        self._show_input_mode()
 
     @pyqtSlot()
     def _on_open_chat(self) -> None:
