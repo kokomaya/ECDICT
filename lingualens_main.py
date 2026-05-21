@@ -85,10 +85,14 @@ def main() -> None:
 
     # ── MagicMirror ──
     from magic_mirror.config import load_env, load_llm_config
-    from magic_mirror.main import create_pipeline, StreamTranslateApp
+    from magic_mirror.main import create_pipeline, create_pipeline_ocr_only, StreamTranslateApp
     load_env()
     try:
         pipeline = create_pipeline()
+    except Exception as e:
+        logger.warning("MagicMirror 翻译后端不可用，降级为仅 OCR: %s", e)
+        pipeline = create_pipeline_ocr_only()
+    try:
         mirror = StreamTranslateApp(pipeline)
         mirror._tray.hide()
         has_mirror = True
@@ -100,10 +104,39 @@ def main() -> None:
     # ── 统一托盘 ──
     tray = _build_tray(app, quickdict, mirror, has_mirror)
 
+    is_cleaning_up = False
+
     def cleanup():
-        if has_mirror:
-            mirror.cleanup()
-        quickdict._quit()
+        nonlocal is_cleaning_up
+        if is_cleaning_up:
+            return
+        is_cleaning_up = True
+
+        if has_mirror and mirror is not None:
+            try:
+                mirror.cleanup()
+            except Exception:
+                logger.exception("MagicMirror cleanup failed")
+
+        # In LinguaLens we are already in QApplication shutdown path,
+        # so do not call quickdict._quit() (it calls QApplication.quit again).
+        try:
+            quickdict._poll_timer.stop()
+            quickdict._settle_timer.stop()
+            quickdict._hotkey.stop()
+            quickdict._tray.hide()
+            quickdict._lookup_closing = False
+            if quickdict._cn_lookup is not None:
+                quickdict._cn_lookup.close()
+                quickdict._cn_lookup = None
+            if quickdict._lookup_engine is not None:
+                quickdict._lookup_engine.close()
+                quickdict._lookup_engine = None
+            if quickdict._worker_thread.isRunning():
+                quickdict._worker_thread.quit()
+                quickdict._worker_thread.wait(1000)
+        except Exception:
+            logger.exception("QuickDict cleanup failed")
 
     app.aboutToQuit.connect(cleanup)
 
