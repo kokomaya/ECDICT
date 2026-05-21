@@ -51,7 +51,7 @@ class _ModelListWorker(QRunnable):
     """后台加载可用模型列表。"""
 
     class Signals(QObject):
-        finished = pyqtSignal(list)
+        finished = pyqtSignal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -305,8 +305,9 @@ class ChatDialog(QDialog):
         w.signals.finished.connect(self._on_models_loaded)
         QThreadPool.globalInstance().start(w)
 
-    @pyqtSlot(list)
-    def _on_models_loaded(self, models: list) -> None:
+    @pyqtSlot(object)
+    def _on_models_loaded(self, models: object) -> None:
+        models = list(models) if isinstance(models, (list, tuple)) else []
         self._combo.clear()
         self._combo.setEnabled(True)
         if not models:
